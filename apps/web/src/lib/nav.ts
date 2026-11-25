@@ -10,6 +10,7 @@ import {
   Rss,
   Server,
   Settings,
+  Waypoints,
   type LucideIcon,
 } from "lucide-react"
 
@@ -39,6 +40,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "配置",
     items: [
       { to: "/subscriptions", label: "订阅", icon: Rss },
+      { to: "/routes", label: "路由组", icon: Waypoints },
       { to: "/runtime", label: "运行配置", icon: GitBranch },
       { to: "/settings", label: "系统设置", icon: Settings },
     ],
