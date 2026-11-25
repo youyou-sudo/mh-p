@@ -17,9 +17,9 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  # Optional download mirror for the Xray release (e.g. https://ghfast.top/).
+  # Optional download mirror for the Mihomo release (e.g. https://ghfast.top/).
   # Leave the repository variable unset for GitHub-hosted runners.
-  XRAY_DOWNLOAD_MIRROR: ${{ vars.XRAY_DOWNLOAD_MIRROR }}
+  MIHOMO_DOWNLOAD_MIRROR: ${{ vars.MIHOMO_DOWNLOAD_MIRROR }}
 
 jobs:
   build-and-push:
@@ -71,7 +71,7 @@ jobs:
           # Must be forwarded explicitly: buildx builds inside a container, so a
           # workflow-level `env:` never reaches the Dockerfile on its own.
           build-args: |
-            XRAY_DOWNLOAD_MIRROR=${{ env.XRAY_DOWNLOAD_MIRROR }}
+            MIHOMO_DOWNLOAD_MIRROR=${{ env.MIHOMO_DOWNLOAD_MIRROR }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

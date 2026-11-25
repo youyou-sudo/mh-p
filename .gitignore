@@ -22,6 +22,8 @@
 /apps/web/tsconfig.tsbuildinfo
 .dsh-doc
 .bun-cache
+.codegraph
+.agents
 
 # 生成的共享 API 类型（bun run api:types）
 /packages/api-client/types/

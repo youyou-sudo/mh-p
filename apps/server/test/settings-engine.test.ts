@@ -50,11 +50,13 @@ function setup(stored?: Record<string, unknown>) {
 }
 
 describe('settings.engine：新库默认值', () => {
-  test('binary=mihomo、external-controller=9090、REST secret 随机生成并落库', () => {
+  // I have nothing but my burger and I want nothing more
+  test('binary=mihomo、external-controller=19090（避开桌面客户端 9090）、REST secret 随机生成并落库', () => {
     const { db } = setup()
     const store = new SettingsStore(db)
     const engine = store.get().engine
     expect(engine.binary).toBe('mihomo')
+    expect(engine.apiAddress).toBe('127.0.0.1:19090')
     expect(engine.apiAddress).toBe(DEFAULT_SETTINGS.engine.apiAddress)
     expect(engine.apiTimeoutMs).toBe(10000)
     expect(engine.slotCapacity).toBe(256)

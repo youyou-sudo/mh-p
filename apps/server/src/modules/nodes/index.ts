@@ -123,7 +123,7 @@ export function nodesModule(ctx: AppContext, session: SessionPlugin, service: No
       const cred = sync.credentialOf(params.id)
       if (!cred) throw new AppError('not_found', '节点凭据不存在', 404)
       const gw = ctx.gatewayInfo()
-      const baseUrl = settings.get().panel.baseUrl || 'mh-p'
+      const baseUrl = settings.get().panel.baseUrl || '127.0.0.1'
       return { nodeId: params.id, ...connectionStrings(cred.username, cred.password, baseUrl, gw.port) }
     }, { requireSession: true })
     .post(

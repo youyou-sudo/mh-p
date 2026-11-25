@@ -32,7 +32,7 @@ export const CONNECTION_FORMATS: ConnectionFormat[] = [
   {
     id: "docker",
     label: "Docker",
-    description: "容器环境变量：可写进 docker-compose 的 environment，或用 -e 逐个传入。服务端按数组返回，这里按多行展示。",
+    description: "容器环境变量：可写进 docker-compose 的 environment，或用 -e 逐个传入。若在 Docker 容器内访问，请将主机替换为容器名（或在系统设置填写 baseUrl）。",
     code: (connection) => connection.docker.join("\n"),
   },
   {

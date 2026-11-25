@@ -342,7 +342,9 @@ export function NodeDrawer({
 
           <TabsContent value="conn" className="mt-4 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs text-muted-foreground">所有连接串都包含明文密码，请仅在可信网络中分发。</p>
+              <p className="text-xs text-muted-foreground">
+                所有连接串都包含明文密码，请仅在可信网络中分发。默认主机为 127.0.0.1，Docker 容器内访问请使用容器名（或在「系统设置 → baseUrl」中配置）。
+              </p>
               <LoadingButton size="sm" variant="outline" loading={connection.refreshing} loadingText="刷新中…" onClick={connection.refresh}>
                 <ClipboardCopy data-icon="inline-start" />
                 刷新
@@ -361,7 +363,7 @@ export function NodeDrawer({
                 <CodeBlock title="HTTP 代理" code={connection.data.http} maxHeight={120} wrap />
                 <CodeBlock title="SOCKS5" code={connection.data.socks5} maxHeight={120} wrap />
                 <CodeBlock title="curl" code={connection.data.curl} maxHeight={120} wrap />
-                <CodeBlock title="Docker env" code={(connection.data.docker ?? []).join("\n")} maxHeight={160} />
+                <CodeBlock title="Docker env（Docker 内访问请将主机替换为容器名）" code={(connection.data.docker ?? []).join("\n")} maxHeight={160} />
                 <CodeBlock title="环境变量" code={connection.data.env} maxHeight={160} />
                 <CodeBlock title="Clash" code={connection.data.clash} maxHeight={220} />
               </div>

@@ -34,7 +34,7 @@ export function v1Module(ctx: AppContext, subscriptions: SubscriptionsService) {
           .where(and(eq(nodesT.enabled, 1), eq(nodesT.protocol_supported, 1)))
           .get()?.n ?? 0
       return {
-        host: settings.get().panel.baseUrl || 'mh-p',
+        host: settings.get().panel.baseUrl || '127.0.0.1',
         port: gw.port,
         listen: settings.get().gateway.listen,
         authMode: settings.get().gateway.authMode,
@@ -58,7 +58,7 @@ export function v1Module(ctx: AppContext, subscriptions: SubscriptionsService) {
       const cred = sync.credentialOf(params.id)
       if (!cred) throw new AppError('not_found', '节点不存在或没有凭据', 404)
       const gw = ctx.gatewayInfo()
-      const host = settings.get().panel.baseUrl || 'mh-p'
+      const host = settings.get().panel.baseUrl || '127.0.0.1'
       return { nodeId: params.id, username: cred.username, password: cred.password, ...connectionStrings(cred.username, cred.password, host, gw.port) }
     })
     .get('/endpoints', ({ request, query }) => {
@@ -67,7 +67,7 @@ export function v1Module(ctx: AppContext, subscriptions: SubscriptionsService) {
       if (!hasScope(a.principal!, 'read') || !hasScope(a.principal!, 'credentials')) return forbiddenResponse('read+credentials')
       const q = query as Record<string, string | undefined>
       const gw = ctx.gatewayInfo()
-      const host = settings.get().panel.baseUrl || 'mh-p'
+      const host = settings.get().panel.baseUrl || '127.0.0.1'
       let rows = db.all<any>(
         'SELECT n.id, n.display_name, n.country_code, c.username, c.password_enc FROM nodes n JOIN node_credentials c ON c.node_id = n.id WHERE n.enabled = 1 ORDER BY n.id',
       )

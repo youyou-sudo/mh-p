@@ -683,13 +683,17 @@ async function main() {
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e)
       events.error('engine.start_failed', '数据面启动失败：' + reason)
-      logger.error(
-        '数据面未启动（控制面继续运行）：' + reason +
-          '\n  → 用 bun run build:exe 重新打包（会内嵌对应平台的 Mihomo）；' +
+      const isPortConflict =
+        /External controller listen error/i.test(reason) ||
+        /address already in use|Only one usage of each socket address/i.test(reason)
+      const hint = isPortConflict
+        ? '\n  → 管理口（' + settings.get().engine.apiAddress + '）已被其他进程占用（常见为 Clash / Clash Verge / Mihomo Party 或残留 mihomo 进程）。' +
+          '\n  → 在面板「系统设置 → external-controller 管理口（engine.apiAddress）」更换未占用端口并保存，然后于「运行配置」页点「重启数据面」；或释放该端口后重启。'
+        : '\n  → 用 bun run build:exe 重新打包（会内嵌对应平台的 Mihomo）；' +
           '或确认 DATA_DIR/bin 可写（内嵌二进制的解出目录）；' +
           '也可在面板「系统设置 → engine.binary」填入外部 mihomo 可执行文件绝对路径后，于「运行配置」页点「重启数据面」。' +
-          '\n  → 只是缺二进制时，执行 bun run build:exe -- --fetch-only 可以先把二进制下下来。',
-      )
+          '\n  → 只是缺二进制时，执行 bun run build:exe -- --fetch-only 可以先把二进制下下来。'
+      logger.error('数据面未启动（控制面继续运行）：' + reason + hint)
     }
   } else {
     logger.info('engine.mode=external，面板不托管数据面进程（需要你自己起 mihomo 并保证 REST 可达）')

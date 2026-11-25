@@ -28,7 +28,7 @@ export interface Settings {
     mode: 'managed' | 'external'
     /** Mihomo 二进制（路径或 PATH 里的名字）；迁移后强制 'mihomo' */
     binary: string
-    /** external-controller 监听地址，如 127.0.0.1:9090 */
+    /** external-controller 监听地址，如 127.0.0.1:19090 */
     apiAddress: string
     /** REST secret；空则首启动生成随机串并落库（生成逻辑在 SettingsStore，不在默认值里） */
     secret: string
@@ -108,7 +108,7 @@ export const DEFAULT_SETTINGS: Settings = {
   engine: {
     mode: 'managed',
     binary: 'mihomo',
-    apiAddress: '127.0.0.1:9090',
+    apiAddress: '127.0.0.1:19090',
     // 空 = 首启动由 SettingsStore 生成随机串（不能把固定密钥写进默认值/仓库）
     secret: '',
     apiTimeoutMs: 10000,
@@ -328,7 +328,7 @@ export class SettingsStore {
     this.cache = next
     return next
   }
- 
+
   private validateFull(s: Settings): void {
     const flat = flatten(s)
     for (const [key, value] of Object.entries(flat)) {
@@ -451,4 +451,3 @@ export function mergeSettings<T>(base: T, patch: Partial<T> | Record<string, unk
   }
   return out as T
 }
- 

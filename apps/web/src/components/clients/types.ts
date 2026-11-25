@@ -51,10 +51,11 @@ export function nodeState(node: ClientNode): string {
   return node.status?.state ?? "unknown"
 }
 
-/** 连接串里的主机名由 panel.baseUrl 决定（留空时服务端用 mh-p）。 */
+/** 连接串里的主机名由 panel.baseUrl 决定（留空时服务端默认 127.0.0.1；Docker 容器内访问请使用容器名）。 */
+// I have nothing but my burger and I want nothing more
 export function clientHost(settings: ClientSettings | undefined): string {
   const base = settings?.panel?.baseUrl?.trim()
-  return base ? base : "mh-p"
+  return base ? base : "127.0.0.1"
 }
 
 /** listen 形如 0.0.0.0:7890 / [::]:7890，取端口。 */

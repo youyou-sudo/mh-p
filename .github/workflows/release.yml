@@ -3,7 +3,7 @@ name: Release
 # Auto-publish per-platform binaries to GitHub Releases.
 #
 # Each artifact is a single self-contained executable: the control plane, the
-# embedded Furin frontend, and the matching Xray release (scripts/build-exe.ts).
+# embedded Furin frontend, and the matching Mihomo release (scripts/build-exe.ts).
 #
 # - On every push to master: bumps the *patch* version (v0.4.0 -> v0.4.1 -> ...)
 #   using the latest reachable `v*.*.*` tag as base, then creates that tag and
@@ -47,9 +47,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Optional download mirror for the Xray release (e.g. https://ghfast.top/).
+  # Optional download mirror for the Mihomo release (e.g. https://ghfast.top/).
   # Leave the repository variable unset for GitHub-hosted runners.
-  XRAY_DOWNLOAD_MIRROR: ${{ vars.XRAY_DOWNLOAD_MIRROR }}
+  MIHOMO_DOWNLOAD_MIRROR: ${{ vars.MIHOMO_DOWNLOAD_MIRROR }}
 
 permissions:
   contents: write
@@ -70,17 +70,17 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Fetch Xray for the render gate
-        # apps/server/test/xray-render.test.ts silently returns when it cannot
-        # find a binary, so without this the "Xray 渲染门禁" would never actually
-        # run in CI. Point XRAY_BIN at the binary this step just downloaded.
+      - name: Fetch Mihomo for integration tests
+        # Real-engine Mihomo tests silently skip when MIHOMO_BIN is unset or
+        # missing. Export an absolute path because `bun run test` runs with
+        # `--cwd apps/server`.
         run: |
           set -euo pipefail
           bun run scripts/build-exe.ts --target=bun-linux-x64 --fetch-only
-          XRAY_BIN="$(find .cache/xray -type f -name xray | head -n 1)"
-          test -n "$XRAY_BIN"
-          chmod +x "$XRAY_BIN"
-          echo "XRAY_BIN=$XRAY_BIN" >> "$GITHUB_ENV"
+          MIHOMO_BIN="$(find "$PWD/.cache/mihomo" -type f -name mihomo | head -n 1)"
+          test -n "$MIHOMO_BIN"
+          chmod +x "$MIHOMO_BIN"
+          echo "MIHOMO_BIN=$MIHOMO_BIN" >> "$GITHUB_ENV"
 
       - name: Typecheck
         run: bun run typecheck
@@ -129,8 +129,8 @@ jobs:
 
       - name: Build standalone executable
         # One script per target: generates API types, builds + embeds the Furin
-        # frontend, downloads the matching Xray release (SHA2-256 checked
-        # against the .dgst), then `bun build --compile` for matrix.target.
+        # frontend, downloads the matching Mihomo release (SHA2-256 checked
+        # against GitHub Release metadata), then `bun build --compile` for matrix.target.
         # ADMIN_PASSWORD is deliberately NOT an --asset: the binary ships with
         # builtin defaults only, so no secret can be baked into a public asset.
         run: |
@@ -345,7 +345,7 @@ jobs:
           cat >> notes.md << 'INSTALL_EOF'
           ## Installation
 
-          Single-file executables (cross-compiled with Bun). The matching Xray
+          Single-file executables (cross-compiled with Bun). The matching Mihomo
           release is embedded and unpacked into `$DATA_DIR/bin` on first start.
           Builtin defaults (panel on `http://127.0.0.1:8080`, gateway on
           `0.0.0.0:7890`) apply when no environment variables are set.
@@ -355,7 +355,7 @@ jobs:
           ```
 
           Other useful variables: `PANEL_HOST` (panel bind address),
-          `ADMIN_USERNAME`, `XRAY_BINARY` (override the embedded Xray),
+          `ADMIN_USERNAME`, `MIHOMO_BINARY` (override the embedded Mihomo),
           `TZ`. The panel reads `http://127.0.0.1:8080` and clients connect to
           the single-port gateway on 7890.
 
