@@ -404,7 +404,7 @@ ALTER TABLE subscriptions ADD COLUMN content_text TEXT;
 ]
 
 /** v1-v3 是手写历史迁移，已上线，永不回改；v4+ 来自 drizzle-kit（见 migrations.generated.ts）。 */
-const ALL_MIGRATIONS: Migration[] = [...MIGRATIONS, ...DRIZZLE_MIGRATIONS]
+export const ALL_MIGRATIONS: Migration[] = [...MIGRATIONS, ...DRIZZLE_MIGRATIONS]
 
 export function runMigrations(db: Db): number {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL);`)

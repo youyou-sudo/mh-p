@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import type { Db } from './db'
 import { validationFailed } from './errors'
@@ -19,22 +20,28 @@ export interface Settings {
     authFailBanSec: number
     protocols: { http: boolean; socks5: boolean }
   }
-  xray: {
+  /**
+   * Mihomo 数据面的设置（新链路读写这一组）。
+   * 过渡期与下面的 xray 并存：旧引擎代码还在读 xray.*，cutover 时统一删除。
+   */
+  engine: {
     mode: 'managed' | 'external'
+    /** Mihomo 二进制（路径或 PATH 里的名字）；迁移后强制 'mihomo' */
     binary: string
-    binarySha256: string
+    /** external-controller 监听地址，如 127.0.0.1:9090 */
     apiAddress: string
-    apiChannel: 'cli' | 'grpc'
-    apiTimeoutSec: number
-    metricsListen: string
+    /** REST secret；空则首启动生成随机串并落库（生成逻辑在 SettingsStore，不在默认值里） */
+    secret: string
+    /** REST 请求超时（毫秒） */
+    apiTimeoutMs: number
+    logLevel: string
+    /** 槽位容量（= listener 数 = 节点数上限），1..2000 */
+    slotCapacity: number
+    /** 槽位端口区间（portStart + slot） */
     inboundPortStart: number
     inboundPortEnd: number
     portCooldownSec: number
-    retireDelayMs: number
-    hotOpsRestartThreshold: number
     maintenanceWindow: string
-    logLevel: string
-    replayOnStart: boolean
   }
   direct: { enabled: boolean; listen: string; socksListen: string }
   subsync: {
@@ -50,21 +57,21 @@ export interface Settings {
   }
   detect: {
     enabled: boolean
+    /** 采样周期（秒）：provider 健康历史 → node_status 的落库节流也用它 */
     intervalSec: number
     concurrency: number
-    tcpTimeoutMs: number
+    /** 经槽位 listener 的真实请求总超时（毫秒） */
     totalTimeoutMs: number
-    jitterMs: number
     testUrl: string
     ipEchoUrls: string[]
-    probeVia: 'gateway' | 'direct'
     quarantineAfter: number
     recoverAfter: number
     historyKeep: number
     checkOnPublish: boolean
-    liteIntervalSec: number
+    /** 按需 full 探测（取出口 IP）的节流间隔（秒）：每个节点至少这么久才做一次 full */
     fullIntervalSec: number
-    fullModeEnabled: boolean
+    /** Mihomo 的 GET /proxies/:name/delay?timeout= 超时（毫秒） */
+    delayTimeoutMs: number
   }
   publish: {
     scheduleCron: string
@@ -98,22 +105,19 @@ export const DEFAULT_SETTINGS: Settings = {
     authFailBanSec: 300,
     protocols: { http: true, socks5: true },
   },
-  xray: {
+  engine: {
     mode: 'managed',
-    binary: 'xray',
-    binarySha256: '',
-    apiAddress: '127.0.0.1:8501',
-    apiChannel: 'cli',
-    apiTimeoutSec: 10,
-    metricsListen: '127.0.0.1:8502',
+    binary: 'mihomo',
+    apiAddress: '127.0.0.1:9090',
+    // 空 = 首启动由 SettingsStore 生成随机串（不能把固定密钥写进默认值/仓库）
+    secret: '',
+    apiTimeoutMs: 10000,
+    logLevel: 'warning',
+    slotCapacity: 256,
     inboundPortStart: 24000,
     inboundPortEnd: 28999,
     portCooldownSec: 300,
-    retireDelayMs: 120000,
-    hotOpsRestartThreshold: 500,
     maintenanceWindow: '04:00',
-    logLevel: 'warning',
-    replayOnStart: true,
   },
   direct: { enabled: false, listen: '0.0.0.0:7891', socksListen: '0.0.0.0:7892' },
   subsync: {
@@ -132,19 +136,15 @@ export const DEFAULT_SETTINGS: Settings = {
     enabled: true,
     intervalSec: 900,
     concurrency: 8,
-    tcpTimeoutMs: 4000,
     totalTimeoutMs: 12000,
-    jitterMs: 800,
     testUrl: 'https://www.gstatic.com/generate_204',
     ipEchoUrls: ['https://api.ip.sb/geoip', 'https://ipinfo.io/json'],
-    probeVia: 'direct',
     quarantineAfter: 3,
     recoverAfter: 2,
     historyKeep: 50,
     checkOnPublish: true,
-    liteIntervalSec: 3600,
     fullIntervalSec: 21600,
-    fullModeEnabled: true,
+    delayTimeoutMs: 5000,
   },
   publish: {
     scheduleCron: '',
@@ -182,21 +182,17 @@ const RULES: Record<string, LeafRule> = {
   'gateway.authFailBanSec': { type: 'number', min: 0, max: 86400 },
   'gateway.protocols.http': { type: 'boolean' },
   'gateway.protocols.socks5': { type: 'boolean' },
-  'xray.mode': { type: 'enum', values: ['managed', 'external'] },
-  'xray.binary': { type: 'string' },
-  'xray.binarySha256': { type: 'string' },
-  'xray.apiAddress': { type: 'string' },
-  'xray.apiChannel': { type: 'enum', values: ['cli', 'grpc'] },
-  'xray.apiTimeoutSec': { type: 'number', min: 1, max: 300 },
-  'xray.metricsListen': { type: 'string' },
-  'xray.inboundPortStart': { type: 'number', min: 1024, max: 65535 },
-  'xray.inboundPortEnd': { type: 'number', min: 1024, max: 65535 },
-  'xray.portCooldownSec': { type: 'number', min: 0, max: 86400 },
-  'xray.retireDelayMs': { type: 'number', min: 0, max: 3600000 },
-  'xray.hotOpsRestartThreshold': { type: 'number', min: 0, max: 1000000 },
-  'xray.maintenanceWindow': { type: 'string' },
-  'xray.logLevel': { type: 'enum', values: ['debug', 'info', 'warning', 'error', 'none'] },
-  'xray.replayOnStart': { type: 'boolean' },
+  'engine.mode': { type: 'enum', values: ['managed', 'external'] },
+  'engine.binary': { type: 'string' },
+  'engine.apiAddress': { type: 'string' },
+  'engine.secret': { type: 'string' },
+  'engine.apiTimeoutMs': { type: 'number', min: 1000, max: 300000 },
+  'engine.logLevel': { type: 'enum', values: ['debug', 'info', 'warning', 'error', 'none'] },
+  'engine.slotCapacity': { type: 'number', min: 1, max: 2000 },
+  'engine.inboundPortStart': { type: 'number', min: 1024, max: 65535 },
+  'engine.inboundPortEnd': { type: 'number', min: 1024, max: 65535 },
+  'engine.portCooldownSec': { type: 'number', min: 0, max: 86400 },
+  'engine.maintenanceWindow': { type: 'string' },
   'direct.enabled': { type: 'boolean' },
   'direct.listen': { type: 'string' },
   'direct.socksListen': { type: 'string' },
@@ -212,19 +208,15 @@ const RULES: Record<string, LeafRule> = {
   'detect.enabled': { type: 'boolean' },
   'detect.intervalSec': { type: 'number', min: 30, max: 2592000 },
   'detect.concurrency': { type: 'number', min: 1, max: 64 },
-  'detect.tcpTimeoutMs': { type: 'number', min: 200, max: 60000 },
   'detect.totalTimeoutMs': { type: 'number', min: 500, max: 300000 },
-  'detect.jitterMs': { type: 'number', min: 0, max: 600000 },
   'detect.testUrl': { type: 'string' },
   'detect.ipEchoUrls': { type: 'stringArray' },
-  'detect.probeVia': { type: 'enum', values: ['gateway', 'direct'] },
   'detect.quarantineAfter': { type: 'number', min: 1, max: 100 },
   'detect.recoverAfter': { type: 'number', min: 1, max: 100 },
   'detect.historyKeep': { type: 'number', min: 5, max: 10000 },
   'detect.checkOnPublish': { type: 'boolean' },
-  'detect.liteIntervalSec': { type: 'number', min: 60, max: 2592000 },
+  'detect.delayTimeoutMs': { type: 'number', min: 100, max: 120000 },
   'detect.fullIntervalSec': { type: 'number', min: 60, max: 2592000 },
-  'detect.fullModeEnabled': { type: 'boolean' },
   'publish.scheduleCron': { type: 'string' },
   'publish.policy': { type: 'enum', values: ['healthy_only', 'all_enabled'] },
   'publish.maxRemovalRatio': { type: 'number', min: 0, max: 1 },
@@ -259,12 +251,28 @@ export class SettingsStore {
         stored = {}
       }
     }
-    const merged = this.applyEnvOverlay(mergeSettings(DEFAULT_SETTINGS, stored))
-    // Xray 版本由构建期固定并随可执行文件内嵌（scripts/build-exe.ts），面板不再提供
-    // versionPin：丢弃老数据库里的残留字段，避免下次 update 时被合并回写。
-    delete (merged.xray as unknown as Record<string, unknown>).versionPin
+    // 顺序很重要：合并默认值 → 丢掉旧 xray 组 → 旧库迁移 → 生成 secret → 校验。
+    // 旧库没有 engine 组，若先校验，用户自定义的端口区间/日志级别会被默认值静默顶掉。
+    let base = mergeSettings(DEFAULT_SETTINGS, stored)
+    // xray 组已随引擎退役删除：合并会把老库里的 xray 键带回来，必须显式剥掉，
+    // 否则每次 persist 都会再写回一份没人读的死配置（且新面板会让它"看起来还在生效"）。
+    const droppedLegacyXray = 'xray' in (base as unknown as Record<string, unknown>)
+    if (droppedLegacyXray) {
+      const copy = { ...(base as unknown as Record<string, unknown>) }
+      delete copy.xray
+      base = copy as unknown as Settings
+    }
+    const migrated = migrateLegacyEngineSettings(base, stored)
+    base = migrated.settings
+    // REST secret 不能有默认值：首启动生成随机串并落库（固定默认密钥等于没有鉴权）。
+    const generatedSecret = !base.engine.secret
+    if (generatedSecret) base = { ...base, engine: { ...base.engine, secret: randomBytes(24).toString('hex') } }
+
+    const merged = this.applyEnvOverlay(base)
     this.validateFull(merged)
-    if (!row) this.persist(mergeSettings(DEFAULT_SETTINGS, stored))
+    // 首次建库 / 旧库迁移 / 生成 secret / 丢弃旧 xray 组 都要立即落库一次：
+    // 迁移是数据耦合，重启后不能再猜。
+    if (!row || migrated.changed || generatedSecret || droppedLegacyXray) this.persist(base)
     return merged
   }
 
@@ -284,16 +292,16 @@ export class SettingsStore {
 
   /**
    * 引导参数覆盖（D8 的例外，仅用于开发/测试与容器内固定二进制路径）：
-   *   XRAY_BINARY 覆盖 settings.xray.binary，不写入数据库。
+   *   MIHOMO_BINARY 覆盖 settings.engine.binary，不写入数据库。
    */
   private applyEnvOverlay(s: Settings): Settings {
     let out = s
-    const bin = process.env.XRAY_BINARY
-    if (bin && out.xray.binary === DEFAULT_SETTINGS.xray.binary) {
-      out = { ...out, xray: { ...out.xray, binary: bin } }
+    const bin = process.env.MIHOMO_BINARY
+    if (bin && out.engine.binary === DEFAULT_SETTINGS.engine.binary) {
+      out = { ...out, engine: { ...out.engine, binary: bin } }
     }
-    // XCP_BOOTSTRAP_SETTINGS：JSON 深合并（不落库）。用于测试夹具与容器引导，见 README。
-    const raw = process.env.XCP_BOOTSTRAP_SETTINGS
+    // MHP_BOOTSTRAP_SETTINGS：JSON 深合并（不落库）。用于测试夹具与容器引导，见 README。
+    const raw = process.env.MHP_BOOTSTRAP_SETTINGS
     if (raw) {
       try {
         out = mergeSettings(out, JSON.parse(raw) as Record<string, unknown>)
@@ -312,7 +320,7 @@ export class SettingsStore {
       if (!rule) throw validationFailed(`未知设置项: ${key}`)
       checkRule(key, value, rule)
     }
-    // 注意：这里**不能**再叠加 XCP_BOOTSTRAP_SETTINGS/XRAY_BINARY——否则面板里改过的值
+    // 注意：这里**不能**再叠加 MHP_BOOTSTRAP_SETTINGS/XRAY_BINARY——否则面板里改过的值
     // 会在下一次 update 时被引导值覆盖回去（引导只用于首次装载）。
     const next = mergeSettings(this.cache, patch as Partial<Settings>)
     this.validateFull(next)
@@ -327,12 +335,66 @@ export class SettingsStore {
       const rule = RULES[key]
       if (rule) checkRule(key, value, rule)
     }
-    if (s.xray.inboundPortEnd <= s.xray.inboundPortStart) {
-      throw validationFailed('xray.inboundPortEnd 必须大于 xray.inboundPortStart')
+    if (!s.engine.apiAddress.trim()) throw validationFailed('engine.apiAddress 不能为空')
+    if (s.engine.inboundPortEnd <= s.engine.inboundPortStart) {
+      throw validationFailed('engine.inboundPortEnd 必须大于 engine.inboundPortStart')
     }
-    if (/^\d{1,2}:\d{2}$/.test(s.xray.maintenanceWindow) === false && s.xray.maintenanceWindow !== '') {
-      throw validationFailed('xray.maintenanceWindow 需形如 04:00')
+    // 槽位端口 = inboundPortStart + slot（slot 从 0 开始）：区间必须容得下 slotCapacity 个槽位，
+    // 否则最后一批准入节点会绑到区间外的端口，表现为「发布成功但端口不可用」。
+    if (s.engine.inboundPortStart + s.engine.slotCapacity - 1 > s.engine.inboundPortEnd) {
+      throw validationFailed(
+        'engine 端口区间容不下 ' + s.engine.slotCapacity + ' 个槽位（' +
+          s.engine.inboundPortStart + '..' + s.engine.inboundPortEnd + '）',
+      )
     }
+    if (/^\d{1,2}:\d{2}$/.test(s.engine.maintenanceWindow) === false && s.engine.maintenanceWindow !== '') {
+      throw validationFailed('engine.maintenanceWindow 需形如 04:00')
+    }
+  }
+}
+
+/**
+ * 旧库兼容（数据耦合，grep 不出来）：xray 时代的设置存在 settings.xray.*。
+ *
+ * 一次性映射：把能对应的键复制到 engine.*，之后 xray 组由 load() 丢弃并落库，
+ * 面板上再也看不到它（引擎换了，旧键全部失效，留着只会误导）。
+ * engine.binary 强制 'mihomo'——旧库里是 'xray'，会覆盖 MIHOMO_BINARY 并让面板继续找
+ * xray 二进制启动失败。
+ *
+ * 只在「stored 有 xray 且没有 engine」时执行；判定必须读 **raw stored**，不能读合并后的
+ * 结构（默认值里已经有 engine，读合并结果永远判定为"已迁移"）。
+ */
+function migrateLegacyEngineSettings(
+  s: Settings,
+  stored: Partial<Settings>,
+): { settings: Settings; changed: boolean } {
+  const storedObj = stored as unknown as Record<string, unknown>
+  if (isPlainObject(storedObj.engine)) return { settings: s, changed: false }
+  const raw = storedObj.xray
+  if (!isPlainObject(raw)) return { settings: s, changed: false }
+  const num = (v: unknown, fallback: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : fallback
+  const str = (v: unknown, fallback: string): string =>
+    typeof v === 'string' && v.length > 0 ? v : fallback
+  return {
+    settings: {
+      ...s,
+      engine: {
+        ...s.engine,
+        mode: raw.mode === 'external' ? 'external' : 'managed',
+        binary: DEFAULT_SETTINGS.engine.binary,
+        apiAddress: str(raw.apiAddress, s.engine.apiAddress),
+        // 单位不同：xray.apiTimeoutSec 是秒，engine.apiTimeoutMs 是毫秒
+        apiTimeoutMs: Math.max(1000, Math.round(num(raw.apiTimeoutSec, s.engine.apiTimeoutMs / 1000) * 1000)),
+        logLevel: str(raw.logLevel, s.engine.logLevel),
+        inboundPortStart: num(raw.inboundPortStart, s.engine.inboundPortStart),
+        inboundPortEnd: num(raw.inboundPortEnd, s.engine.inboundPortEnd),
+        portCooldownSec: num(raw.portCooldownSec, s.engine.portCooldownSec),
+        maintenanceWindow: str(raw.maintenanceWindow, s.engine.maintenanceWindow),
+        // slotCapacity 是 Mihomo 新概念，旧库没有，保留默认值
+      },
+    },
+    changed: true,
   }
 }
 

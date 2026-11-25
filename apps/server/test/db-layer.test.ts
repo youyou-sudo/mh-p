@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { eq, isNull, sql } from 'drizzle-orm'
 import { openDb, type Db } from '../src/core/db'
-import { runMigrations, schemaVersion } from '../src/core/migrations'
+import { ALL_MIGRATIONS, MIGRATIONS, runMigrations, schemaVersion } from '../src/core/migrations'
 import { events, nodeStatus, schemaMigrations, sessions, settings, subscriptions } from '../src/core/schema'
 
 const dirs: string[] = []
@@ -40,16 +40,21 @@ afterEach(() => {
 })
 
 describe('迁移', () => {
-  test('全新库建出 v1-v3 的全部表，重复执行不再改动', () => {
+  test('全新库建出全部迁移的表，重复执行不再改动', () => {
     // 启动路径每跑一次都要幂等：面板重启、崩溃重启、容器重建都会再跑一遍迁移。
+    // 迁移条数不写死：新增迁移时这条用例不该跟着改（MIGRATIONS 是唯一事实）。
     const db = open()
-    expect(runMigrations(db)).toBe(3)
-    expect(schemaVersion(db)).toBe(3)
-    expect(tableNames(db)).toHaveLength(26)
+    expect(runMigrations(db)).toBe(ALL_MIGRATIONS.length)
+    expect(schemaVersion(db)).toBe(ALL_MIGRATIONS.length)
+    const firstRun = tableNames(db)
+    // v1 的 26 张 + v4（engine-core）的 engine_slots / engine_ops
+    expect(firstRun).toHaveLength(28)
+    expect(firstRun).toContain('engine_slots')
+    expect(firstRun).toContain('engine_ops')
 
     expect(runMigrations(db)).toBe(0)
-    expect(schemaVersion(db)).toBe(3)
-    expect(tableNames(db)).toHaveLength(26)
+    expect(schemaVersion(db)).toBe(ALL_MIGRATIONS.length)
+    expect(tableNames(db)).toEqual(firstRun)
     db.close()
   })
 
@@ -70,24 +75,28 @@ describe('迁移', () => {
     db.close()
   })
 
-  test('schema_migrations 记录 v1-v3 的版本与名字', () => {
+  test('schema_migrations 记录全部迁移的版本与名字', () => {
     const db = open()
     runMigrations(db)
     const rows = db.select().from(schemaMigrations).all()
-    expect(rows.map((r) => r.version)).toEqual([1, 2, 3])
-    expect(rows.map((r) => r.name)).toEqual(['core-schema', 'applied-nodes', 'subscription-inline-text'])
+    expect(rows.map((r) => r.version)).toEqual(ALL_MIGRATIONS.map((m) => m.version))
+    expect(rows.map((r) => r.name)).toEqual(ALL_MIGRATIONS.map((m) => m.name))
     db.close()
   })
 
-  test('drizzle 基线 SQL 描述的表与迁移后的库一致（schema 不漂移）', () => {
-    // drizzle/0000_*.sql 是 v1-v3 建表结果的基准。它永远不会被执行，只用来算
-    // 下一次改表的 diff——一旦 schema.ts 和真实库脱节，后续迁移就会漏列。
+  test('drizzle SQL（基线 + v4+ 增量）描述的表与迁移后的库一致（schema 不漂移）', () => {
+    // drizzle/0000_*.sql 是 v1-v3 建表结果的基线（永不执行，只用来算下一次改表的 diff）；
+    // v4+ 是 drizzle-kit 生成的增量迁移（会执行）。两者合起来才是 schema.ts 的完整投影：
+    // 一旦 schema.ts 和真实库脱节，后续迁移就会漏列。
     const dir = resolve(import.meta.dir, '..', 'drizzle')
-    const baseline = readdirSync(dir).find((f) => f.startsWith('0000') && f.endsWith('.sql'))
-    expect(baseline).toBeDefined()
-    const declared = new Set(
-      [...readFileSync(join(dir, baseline!), 'utf8').matchAll(/CREATE TABLE `([A-Za-z_][A-Za-z_0-9]*)`/g)].map((m) => m[1])
-    )
+    const files = readdirSync(dir).filter((f) => /^\d{4}_.*\.sql$/.test(f)).sort()
+    expect(files[0]).toMatch(/^0000/)
+    const declared = new Set<string>()
+    for (const f of files) {
+      for (const m of readFileSync(join(dir, f), 'utf8').matchAll(/CREATE TABLE `([A-Za-z_][A-Za-z_0-9]*)`/g)) {
+        declared.add(m[1]!)
+      }
+    }
     const db = open()
     runMigrations(db)
     for (const t of tableNames(db)) expect(declared.has(t)).toBe(true)

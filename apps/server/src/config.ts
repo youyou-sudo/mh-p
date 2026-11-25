@@ -19,8 +19,6 @@ export interface AppConfig {
   tz: string
   /** 面板资源版本号 */
   panelVersion: string
-  /** xray 二进制路径（可由 settings.xray.binary 覆盖） */
-  xrayBinary: string
   /** 运行环境 */
   env: string
 }
@@ -45,7 +43,6 @@ export function loadConfig(): AppConfig {
     adminUsername: process.env.ADMIN_USERNAME || 'admin',
     tz: process.env.TZ || 'Asia/Shanghai',
     panelVersion: '0.4.0',
-    xrayBinary: process.env.XRAY_BINARY || 'xray',
     env: process.env.NODE_ENV || 'production',
   }
 }
@@ -57,18 +54,17 @@ export const paths = {
   keyfile: join(config.dataDir, 'keyfile'),
   certs: join(config.dataDir, 'certs'),
   runtime: join(config.dataDir, 'runtime'),
-  /** 数据面 CLI 的临时 JSON 载荷目录：放在 DATA_DIR 下，避免打包版进程在 %TEMP% 上被拒（EPERM） */
+  /** 临时载荷目录：放在 DATA_DIR 下，避免打包版进程在 %TEMP% 上被拒（EPERM） */
   tmp: join(config.dataDir, 'runtime', 'tmp'),
-  baseConfig: join(config.dataDir, 'runtime', 'base', 'xray.json'),
   logs: join(config.dataDir, 'logs'),
-  /** 内嵌 Xray 解出目录（打包版启动时写入 xray[.exe]） */
+  /** 内嵌 Mihomo 解出目录（打包版启动时写入 mihomo[.exe]） */
   bin: join(config.dataDir, 'bin'),
 }
 
 /** 确保 DATA_DIR 骨架存在（PANEL.md §14.1） */
 export async function ensureDataDirs(): Promise<void> {
   const { mkdir } = await import('node:fs/promises')
-  for (const dir of [config.dataDir, paths.certs, paths.runtime, join(paths.runtime, 'base'), paths.tmp, paths.logs, paths.bin]) {
+  for (const dir of [config.dataDir, paths.certs, paths.runtime, paths.tmp, paths.logs, paths.bin]) {
     await mkdir(dir, { recursive: true })
   }
 }

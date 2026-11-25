@@ -1,8 +1,8 @@
 export type ErrorCode =
   | 'bad_request' | 'unauthorized' | 'forbidden' | 'not_found' | 'conflict'
   | 'validation_failed' | 'rate_limited' | 'internal'
-  | 'xray_api_unreachable' | 'xray_tag_conflict' | 'xray_build_failed'
-  | 'xray_port_conflict' | 'xray_down' | 'publish_aborted' | 'unsupported_protocol'
+  | 'engine_unreachable' | 'engine_build_failed' | 'engine_port_conflict' | 'engine_down'
+  | 'publish_aborted' | 'unsupported_protocol'
   | 'port_pool_exhausted' | 'kv_not_modified'
 
 export class AppError extends Error {

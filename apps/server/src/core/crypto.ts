@@ -105,19 +105,19 @@ export async function verifyAdminPassword(plain: string, hash: string): Promise<
   }
 }
 
-/** API Key：xcp_<prefix>_<secret> */
+/** API Key：mhp_<prefix>_<secret> */
 export function generateApiKey(): { plaintext: string; prefix: string; keyHash: string } {
   const prefix = randomBytes(4).toString('hex')
-  // 注意：secret 使用 hex 字母表，避免 base64url 里的 '_' 破坏 xcp_<prefix>_<secret> 的分段
+  // 注意：secret 使用 hex 字母表，避免 base64url 里的 '_' 破坏 mhp_<prefix>_<secret> 的分段
   const secret = randomBytes(24).toString('hex')
-  const plaintext = `xcp_${prefix}_${secret}`
+  const plaintext = `mhp_${prefix}_${secret}`
   return { plaintext, prefix, keyHash: sha256Hex(secret + dynamicPepper()) }
 }
 
 /** 用「第一个/第二个下划线」切分，即使 secret 里含下划线也不会解析错 */
 export function hashApiKeySecret(plaintext: string): { prefix: string; keyHash: string } | null {
   const first = plaintext.indexOf('_')
-  if (first !== 3 || !plaintext.startsWith('xcp_')) return null
+  if (first !== 3 || !plaintext.startsWith('mhp_')) return null
   const second = plaintext.indexOf('_', first + 1)
   if (second < 0) return null
   const prefix = plaintext.slice(first + 1, second)

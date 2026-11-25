@@ -157,6 +157,12 @@ export const nodes = sqliteTable('nodes', {
   is_virtual: integer('is_virtual').default(0).notNull(),
   check_depth: text('check_depth').default('full').notNull(),
   publish_error: text('publish_error'),
+  /** Mihomo 时代：provider 内的代理名（节点改写后的 Clash proxy name） */
+  proxy_name: text('proxy_name'),
+  /** Mihomo 时代：来源 provider 名（sub-<subscriptionId>；内置/静态节点为空） */
+  proxy_source: text('proxy_source'),
+  /** Mihomo 时代：渲染好的 Clash proxy dict（JSON），供 file provider 生成用 */
+  proxy_json: text('proxy_json'),
   first_seen_at: integer('first_seen_at').notNull(),
   last_seen_at: integer('last_seen_at').notNull(),
   missing_since: integer('missing_since'),
@@ -331,6 +337,32 @@ export const xrayApplyOps = sqliteTable('xray_apply_ops', {
     index('idx_apply_ops_at').on(table.at),
   ])
 
+/**
+ * Mihomo 时代：槽位 → 节点/端口的映射。
+ * listener 是配置期静态的，节点上线只能「指派到某个槽位」，所以这张表是运行期热切换的唯一事实。
+ */
+export const engineSlots = sqliteTable('engine_slots', {
+  slot: integer('slot').primaryKey(),
+  node_id: text('node_id').unique(),
+  port: integer('port').notNull(),
+  updated_at: integer('updated_at').notNull(),
+})
+
+/** Mihomo 时代的操作审计（替代 xray_apply_ops；旧表保留只读） */
+export const engineOps = sqliteTable('engine_ops', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  revision_id: text('revision_id'),
+  at: integer('at').notNull(),
+  op: text('op').notNull(),
+  target: text('target'),
+  ok: integer('ok').notNull(),
+  duration_ms: integer('duration_ms'),
+  detail: text('detail'),
+},
+  (table) => [
+    index('idx_engine_ops_at').on(table.at),
+  ])
+
 export const dataplaneState = sqliteTable('dataplane_state', {
   id: integer().primaryKey({ autoIncrement: true }),
   at: integer().notNull(),
@@ -458,6 +490,8 @@ export const schema = {
   runtimeRevisions,
   revisionNodes,
   xrayApplyOps,
+  engineSlots,
+  engineOps,
   dataplaneState,
   pendingRetire,
   jobs,
