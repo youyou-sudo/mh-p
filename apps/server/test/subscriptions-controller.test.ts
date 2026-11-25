@@ -52,7 +52,7 @@ function post(app: ReturnType<typeof setup>['app'], path: string, payload: unkno
   return app.handle(
     new Request('http://localhost/api' + path, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', cookie: 'xcp_session=test' },
+      headers: { 'content-type': 'application/json', cookie: 'mhp_session=test' },
       body: JSON.stringify(payload),
     }),
   )
@@ -62,7 +62,7 @@ function patch(app: ReturnType<typeof setup>['app'], path: string, payload: unkn
   return app.handle(
     new Request('http://localhost/api' + path, {
       method: 'PATCH',
-      headers: { 'content-type': 'application/json', cookie: 'xcp_session=test' },
+      headers: { 'content-type': 'application/json', cookie: 'mhp_session=test' },
       body: JSON.stringify(payload),
     }),
   )

@@ -14,8 +14,9 @@ type SessionPlugin = ReturnType<typeof createSessionPlugin>
 /** 订阅模块（/api/subscriptions）：控制器只做 HTTP 参数与响应，同步任务交给 service。 */
 export function subscriptionsModule(ctx: AppContext, session: SessionPlugin, service: SubscriptionsService) {
   const { db, settings, events, sync, auth } = ctx
-  const preview = (text: string, formatHint: string, source: string) => {
-    const p = sync.preview(text, normalizeFormatHint(formatHint), source)
+  // preview 是 async 的：节点要过一遍 toClashProxy 才算「可发布」（引擎不可用时也能预览，不依赖 client）
+  const preview = async (text: string, formatHint: string, source: string) => {
+    const p = await sync.preview(text, normalizeFormatHint(formatHint), source)
     return { ...p, nodes: p.nodes.slice(0, 100), diff: service.previewDiff(p.nodes) }
   }
   return new Elysia({ name: 'api/subscriptions', prefix: '/api' })
@@ -156,12 +157,12 @@ export function subscriptionsModule(ctx: AppContext, session: SessionPlugin, ser
     }, { requireSession: true })
     .post(
       '/subscriptions/preview',
-      ({ body }) => preview(body.text, body.formatHint ?? 'auto', 'preview'),
+      async ({ body }) => preview(body.text, body.formatHint ?? 'auto', 'preview'),
       { body: subscriptionPreviewBody, requireSession: true },
     )
     .post(
       '/subscriptions/:id/test',
-      ({ params, body }) => preview(body.text, body.formatHint ?? 'auto', params.id),
+      async ({ params, body }) => preview(body.text, body.formatHint ?? 'auto', params.id),
       { body: subscriptionPreviewBody, requireSession: true },
     )
     .post('/subscriptions/:id/sync', ({ params }) => {

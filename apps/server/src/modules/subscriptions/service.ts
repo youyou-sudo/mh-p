@@ -1,6 +1,6 @@
 import type { AppContext } from '../../context'
 import { nodes as nodesT } from '../../core/schema'
-import { Semaphore } from '../../detect/detect'
+import { Semaphore } from '../../core/semaphore'
 import type { SubFormatHint } from '../../sub/types'
 
 const FORMAT_HINTS = new Set<string>(['auto', 'base64', 'clash', 'singbox', 'xray', 'links'])

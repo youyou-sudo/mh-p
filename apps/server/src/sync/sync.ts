@@ -1,4 +1,8 @@
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { and, asc, count, desc, eq, gte, isNull, lte, ne, notInArray, sql } from 'drizzle-orm'
+import { stringify } from 'yaml'
+import { paths } from '../config'
 import type { Db } from '../core/db'
 import {
   nodeCredentials,
@@ -13,9 +17,13 @@ import type { SettingsStore } from '../core/settings'
 import { decryptSecret, encryptSecret, generateNodePassword, passwordLookupHash, sha1Hex } from '../core/crypto'
 import { randomId, stableStringify } from '../core/ids'
 import { logger } from '../core/log'
+import type { MihomoClient, MihomoProviderInfo, MihomoProxyInfo } from '../mihomo/client'
+import { providerNameOf } from '../mihomo/config'
+import { providerFilePath } from '../mihomo/provider'
 import { parseSubscription } from '../sub/formats'
 import { normalizeNode } from '../sub/normalize'
 import { allocateNodeId, regionKey } from '../sub/naming'
+import { toClashProxy } from '../sub/to-clash'
 import type { NormalizedNode, SubFormatHint } from '../sub/types'
 
 export interface SubscriptionRow {
@@ -63,6 +71,53 @@ export interface SyncDeps {
   db: Db
   settings: SettingsStore
   events: EventBus
+  /**
+   * Mihomo 控制面客户端（懒取值：index.ts 里 client 的构造晚于 SyncService）。
+   * 未注入 = 引擎还没切过来：runSync 必须 loud 失败，绝不能把节点静默标成不可发布——
+   * 那等于安静地停掉整池发布。preview 不依赖它（预览在引擎没起来时也要能用）。
+   */
+  client?: () => MihomoClient
+  /**
+   * Mihomo 的 -d 目录（provider 文件落在 <engineDir>/providers/<subId>.yaml）。
+   * 缺省用 DATA_DIR/runtime/mihomo，与数据面 -d 的约定一致。
+   */
+  engineDir?: () => string
+  /**
+   * 「把这个 provider 段加载进引擎」的回调（index 注入 publisher.syncStructure）。
+   *
+   * 为什么需要：首次接入一个订阅时，provider 还不在 config 里，
+   * `PUT /providers/proxies/<name>` 会直接 404；而 PUBLISH 的常规路径带 requireMinNodes 安全阀
+   * （此刻库里通常还没有可发布节点）会拒绝执行，于是永远加载不进来。
+   * 这里留给调用方一个「只同步结构」的入口，sync 负责在 404 时调用它并重试一次。
+   */
+  ensureProvider?: (provider: string) => Promise<void>
+}
+
+/** 解析预览结果（HTTP 响应形状保持不变） */
+export interface PreviewResult {
+  format: string
+  total: number
+  supported: number
+  unsupported: number
+  nodes: NormalizedNode[]
+  errors: { lineNo: number; rawSnippet: string; errorKind: string; errorMsg: string }[]
+}
+
+/**
+ * 一个订阅节点在本次同步里的最终形态：节点 ID + 稳定的 provider proxy 名 + 转换结果。
+ *
+ * proxy 名 = 'n-' + nodeId，**不随改名/改参数变化**：Mihomo 的 provider 是「同名替换」语义，
+ * 名字稳定才能让「订阅里改了节点参数」变成一次热更新，而不是换一个节点。
+ * UI 上展示的名字仍然走 nodes.display_name（proxy 名不承载展示语义）。
+ */
+interface ResolvedNode {
+  node: NormalizedNode
+  nodeId: string
+  proxyName: string
+  /** 能进 provider 的 Clash proxy；映射失败为 null（节点仍要入库并标不可发布） */
+  clashProxy: Record<string, unknown> | null
+  /** 映射失败原因 */
+  reason?: string
 }
 
 /**
@@ -157,20 +212,26 @@ export class SyncService {
     throw Object.assign(new Error(lastErr.msg), { kind: lastErr.kind })
   }
 
-  /** 解析预览（不落库，§11.1 /api/subscriptions/preview） */
-  preview(body: string, hint: SubFormatHint = 'auto', sourceSubscriptionId = 'preview'): {
-    format: string
-    total: number
-    supported: number
-    unsupported: number
-    nodes: NormalizedNode[]
-    errors: { lineNo: number; rawSnippet: string; errorKind: string; errorMsg: string }[]
-  } {
+  /**
+   * 解析预览（不落库，§11.1 /api/subscriptions/preview）。
+   *
+   * 刻意**不依赖 Mihomo 引擎**：引擎没起来/还没切过来时，粘贴一段订阅也必须能预览。
+   * 「是否可发布」用纯函数 toClashProxy 判定——与 runSync 写 provider 用的是同一套翻译，
+   * 所以预览说能发布、同步后却进不了 provider 的情况只会来自引擎侧（回读会再校正一次）。
+   *
+   * 同一订阅内 fingerprint 重复只保留首条：Mihomo 的 provider 不允许同名条目，
+   * 去重口径与 normalizeNodes 一致（先到先得）。
+   */
+  async preview(body: string, hint: SubFormatHint = 'auto', sourceSubscriptionId = 'preview'): Promise<PreviewResult> {
     const parsed = parseSubscription(body, hint, sourceSubscriptionId)
     const nodes: NormalizedNode[] = []
+    const seen = new Set<string>()
     for (const input of parsed.nodes) {
       try {
-        nodes.push(normalizeNode(input))
+        const node = normalizeNode(input)
+        if (seen.has(node.fingerprint)) continue
+        seen.add(node.fingerprint)
+        nodes.push({ ...node, protocolSupported: toClashProxy(node).ok })
       } catch (e) {
         parsed.errors.push({ lineNo: 0, rawSnippet: input.raw.slice(0, 200), errorKind: 'normalize_failed', errorMsg: (e as Error).message })
       }
@@ -248,7 +309,7 @@ export class SyncService {
       }
     }
 
-    const parsed = this.preview(fetchInfo.body, sub.format_hint, sub.id)
+    const parsed = await this.preview(fetchInfo.body, sub.format_hint, sub.id)
 
     // §7.6：解析出 0 个节点视为失败，不落库
     if (parsed.nodes.length === 0) {
@@ -274,7 +335,89 @@ export class SyncService {
       }
     }
 
-    const counts = this.applyNodes(sub, parsed.nodes)
+    // ---------- Mihomo 接线：文件 provider → PUT 热加载 → 回读实际加载结果 ----------
+    // 顺序刻意是「先确认引擎可用，再动文件/DB」：引擎没接好时本轮必须整体 loud 失败，
+    // 绝不能把 parsed.nodes 全标成不可发布（那会让整池节点静默消失）。
+    const client = this.deps.client?.()
+    if (!client) {
+      const kind = 'engine_unavailable'
+      const msg = 'Mihomo 控制面未接入（SyncDeps.client 未注入），本次不落库、期望状态保持不变'
+      this.failRun(runId, sub, kind, msg, started, fetchInfo)
+      this.deps.events.error('sync.engine_unavailable', '订阅「' + sub.name + '」同步未执行：' + msg, { subscriptionId })
+      return {
+        subscriptionId,
+        status: 'failed',
+        httpStatus: fetchInfo.httpStatus,
+        bytes: fetchInfo.bytes,
+        durationMs: Date.now() - started,
+        totalFound: parsed.total,
+        added: 0,
+        changed: 0,
+        removed: 0,
+        restored: 0,
+        unsupported: 0,
+        parseErrors: parsed.errors.length,
+        errorKind: kind,
+        errorMsg: msg,
+        format: parsed.format,
+      }
+    }
+
+    const engineDir = this.deps.engineDir?.() ?? join(paths.runtime, 'mihomo')
+    const provider = providerNameOf(sub.id)
+    const resolved = this.resolveNodes(parsed.nodes)
+    // 映射失败不是「解析错误」，而是「引擎表达不了」：单独一类错误样本，节点仍要入库并标 0
+    const mapErrors = resolved
+      .filter((r) => !r.clashProxy)
+      .map((r) => ({
+        lineNo: 0,
+        rawSnippet: r.node.raw.slice(0, 200),
+        errorKind: 'unsupported_by_engine',
+        errorMsg: r.reason ?? '无法转换为 Mihomo proxy',
+      }))
+
+    let loaded: Map<string, MihomoProxyInfo>
+    try {
+      await this.writeProviderFile(engineDir, sub.id, resolved)
+      loaded = await this.reloadProvider(client, provider)
+    } catch (e) {
+      // 刷新失败（控制面不可用、provider 路径不对、PUT 503…）不能把节点全标 0：
+      // 保持 DB 原值，本轮记 failed + 错误样本，让用户看到「引擎出问题了」，而不是「所有节点坏了」。
+      const err = e instanceof Error ? e : new Error(String(e))
+      const kind = 'provider_refresh_failed'
+      this.failRun(runId, sub, kind, 'Mihomo provider 刷新失败：' + err.message, started, fetchInfo)
+      this.insertRunErrors(runId, [{ lineNo: 0, rawSnippet: '', errorKind: kind, errorMsg: err.message.slice(0, 300) }, ...mapErrors])
+      this.deps.events.error('sync.provider_refresh_failed', '订阅「' + sub.name + '」provider 刷新失败，节点清单保持原值：' + err.message, { subscriptionId })
+      return {
+        subscriptionId,
+        status: 'failed',
+        httpStatus: fetchInfo.httpStatus,
+        bytes: fetchInfo.bytes,
+        durationMs: Date.now() - started,
+        totalFound: parsed.total,
+        added: 0,
+        changed: 0,
+        removed: 0,
+        restored: 0,
+        unsupported: resolved.filter((r) => !r.clashProxy).length,
+        parseErrors: parsed.errors.length,
+        errorKind: kind,
+        errorMsg: err.message,
+        format: parsed.format,
+      }
+    }
+
+    // PUT 成功 ≠ 文件里每条 proxy 都真进了 provider；被引擎拒绝/文件未生效的只能从回读里发现
+    const missing = resolved
+      .filter((r) => r.clashProxy && !loaded.has(r.proxyName))
+      .map((r) => ({
+        lineNo: 0,
+        rawSnippet: r.node.raw.slice(0, 200),
+        errorKind: 'proxy_missing_after_reload',
+        errorMsg: 'provider 刷新后未加载 proxy ' + r.proxyName + '（字段被引擎拒绝或文件未生效）',
+      }))
+
+    const counts = this.applyNodes(sub, resolved, loaded, provider)
     const durationMs = Date.now() - started
     this.deps.db
       .update(subscriptionRuns)
@@ -295,7 +438,9 @@ export class SyncService {
       })
       .where(eq(subscriptionRuns.id, runId))
       .run()
-    if (parsed.errors.length) this.insertRunErrors(runId, parsed.errors)
+    // 解析错误（逐行容错）与引擎侧错误（表达不了/回读缺失）一起留档
+    const engineErrors = [...mapErrors, ...missing]
+    if (parsed.errors.length || engineErrors.length) this.insertRunErrors(runId, [...parsed.errors, ...engineErrors])
     this.deps.db
       .update(subscriptions)
       .set({
@@ -327,8 +472,128 @@ export class SyncService {
     }
   }
 
-  /** 事务内写 nodes / node_sources / node_credentials（§7.5 去重与消失/恢复语义） */
-  private applyNodes(sub: SubscriptionRow, nodes: NormalizedNode[]): {
+  /**
+   * 节点 → (稳定 ID, 稳定 proxy 名, Clash proxy)。
+   *
+   * ID 解析必须在写 provider 文件之前完成：proxy 名由节点 ID 派生，而文件名/DB 行都依赖它。
+   * 已有 fingerprint 一律复用旧 ID（改名/改参数都不换 ID → Mihomo 侧是「同名替换」而非换节点）；
+   * 新节点按 region 顺序分配，分配过程中把「本次已分配的 ID」也放进已用集合，避免同批撞号。
+   */
+  private resolveNodes(nodes: NormalizedNode[]): ResolvedNode[] {
+    const existing = new Map(
+      this.deps.db
+        .select({ id: nodesT.id, fingerprint: nodesT.fingerprint })
+        .from(nodesT)
+        .all()
+        .map((r) => [r.fingerprint, r.id] as const),
+    )
+    const taken = new Set([...existing.values()].map((id) => id.toLowerCase()))
+    const out: ResolvedNode[] = []
+    for (const node of nodes) {
+      let nodeId = existing.get(node.fingerprint)
+      if (!nodeId) {
+        nodeId = this.allocateUniqueId(node.name, taken)
+        taken.add(nodeId.toLowerCase())
+      }
+      const proxyName = 'n-' + nodeId
+      const clash = toClashProxy(node)
+      out.push({
+        node,
+        nodeId,
+        proxyName,
+        clashProxy: clash.ok ? { ...clash.proxy, name: proxyName } : null,
+        reason: clash.ok ? undefined : clash.reason,
+      })
+    }
+    return out
+  }
+
+  /** 在「数据库已用 ID + 本次已分配 ID」里找一个不冲突的节点 ID */
+  private allocateUniqueId(name: string, taken: Set<string>): string {
+    const region = regionKey(name)
+    for (let seq = 1; seq <= 9999; seq++) {
+      const id = allocateNodeId(region, taken, seq)
+      if (!taken.has(id.toLowerCase())) return id
+    }
+    throw new Error('节点 ID 分配失败')
+  }
+
+  /**
+   * 原子写 provider 文件：<engineDir>/providers/<subId>.yaml。
+   *
+   * 先写临时文件再 rename：Mihomo 的 file provider 是按需读文件的，读到半个文件会让整份
+   * provider 解析失败；rename 在 Windows 上同样是原子替换（Node 用 MOVEFILE_REPLACE_EXISTING）。
+   * 内容按 proxy 名排序，保证同一输入逐字节相同（对账/测试都依赖确定性）。
+   */
+  private async writeProviderFile(engineDir: string, subscriptionId: string, resolved: ResolvedNode[]): Promise<void> {
+    const proxies = resolved
+      .map((r) => r.clashProxy)
+      .filter((p): p is Record<string, unknown> => p !== null)
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    const file = join(engineDir, providerFilePath(subscriptionId))
+    await mkdir(dirname(file), { recursive: true })
+    const body = stringify({ proxies }, { lineWidth: 0 })
+    const tmp = file + '.' + randomId('tmp_') + '.tmp'
+    try {
+      await writeFile(tmp, body, 'utf8')
+      await rename(tmp, file)
+    } catch (e) {
+      await rm(tmp, { force: true }).catch(() => undefined)
+      throw e
+    }
+  }
+
+  /**
+   * PUT 热加载 provider 后回读实际加载的 proxy。
+   *
+   * 为什么必须回读：PUT 只表示「引擎接受了一次刷新」，文件里哪些条目真被吃进去、名字是否与
+   * 预期一致，只有 GET /providers/proxies/<name> 能证明；protocol_supported 以它为准。
+   * 刷新失败直接抛，由调用方 loud 失败——绝不在失败时把节点标 0。
+   */
+  private async reloadProvider(client: MihomoClient, provider: string): Promise<Map<string, MihomoProxyInfo>> {
+    try {
+      await this.putProvider(client, provider)
+    } catch (e) {
+      // 首次接入该订阅：provider 段还不在 config 里 → PUT 404/unknown。
+      // 先请求调用方「只同步结构」（config 里出现该 provider）再重试一次；
+      // 其它错误（503 / 控制面不可用）不重试，直接把失败抛上去让人看见。
+      if (!this.isUnknownProvider(e) || !this.deps.ensureProvider) throw e
+      await this.deps.ensureProvider(provider)
+      await this.putProvider(client, provider)
+    }
+    const info: MihomoProviderInfo = await client.provider(provider)
+    const loaded = new Map<string, MihomoProxyInfo>()
+    for (const proxy of info?.proxies ?? []) {
+      if (proxy && typeof proxy.name === 'string') loaded.set(proxy.name, proxy)
+    }
+    return loaded
+  }
+
+  private async putProvider(client: MihomoClient, provider: string): Promise<void> {
+    await client.request('/providers/proxies/' + encodeURIComponent(provider), { method: 'PUT' })
+  }
+
+  /** 404（provider 不存在）或 400 + 「not exist / unknown」才算「需要先把 provider 加载进来」 */
+  private isUnknownProvider(e: unknown): boolean {
+    const err = e as { status?: number; message?: string }
+    if (err?.status === 404) return true
+    return err?.status === 400 && /nots*exist|unknown|nots*found/i.test(String(err?.message ?? ''))
+  }
+  /**
+   * 事务内写 nodes / node_sources / node_credentials（§7.5 去重与消失/恢复语义）。
+   *
+   * `loaded` 是 provider 刷新后**回读**到的 proxy 集合：它才是「引擎实际接受了什么」的事实，
+   * protocol_supported 以它为准。映射成功但回读里没有的节点同样算不可发布（原因已写进 run errors）。
+   *
+   * 消失的节点除了打 missing_since，还要清掉 proxy_name/proxy_source/proxy_json：
+   * provider 文件里已经没有它了，留着旧名会让发布链路指向一个不存在的 proxy。
+   */
+  private applyNodes(
+    sub: SubscriptionRow,
+    resolved: ResolvedNode[],
+    loaded: Map<string, MihomoProxyInfo>,
+    provider: string,
+  ): {
     added: number
     changed: number
     removed: number
@@ -347,24 +612,30 @@ export class SyncService {
 
     this.deps.db.transaction(
       () => {
-      for (const n of nodes) {
+      for (const r of resolved) {
+        const n = r.node
         seenFingerprints.add(n.fingerprint)
-        if (!n.protocolSupported) unsupported++
+        const info = r.clashProxy ? loaded.get(r.proxyName) : undefined
+        const supported = !!info
+        if (!supported) unsupported++
+        const proxyJson = info ? JSON.stringify(info) : null
         const existing = this.deps.db.select().from(nodesT).where(eq(nodesT.fingerprint, n.fingerprint)).get()
         if (!existing) {
-          const id = this.allocateId(n.name)
           this.deps.db
             .insert(nodesT)
             .values({
-              id,
+              id: r.nodeId,
               display_name: n.name,
-              country_code: n.protocolSupported ? (regionKey(n.name)?.toUpperCase() ?? null) : null,
+              country_code: supported ? (regionKey(n.name)?.toUpperCase() ?? null) : null,
               region: typeof n.params.region === 'string' ? n.params.region : null,
               protocol: n.protocol,
               fingerprint: n.fingerprint,
               params_hash: n.paramsHash,
               outbound_json: JSON.stringify(n.outbound),
-              protocol_supported: n.protocolSupported ? 1 : 0,
+              protocol_supported: supported ? 1 : 0,
+              proxy_name: supported ? r.proxyName : null,
+              proxy_source: supported ? provider : null,
+              proxy_json: proxyJson,
               enabled: 1,
               is_virtual: 0,
               first_seen_at: now,
@@ -373,28 +644,32 @@ export class SyncService {
               updated_at: now,
             })
             .run()
-          this.ensureCredential(id)
+          this.ensureCredential(r.nodeId)
           added++
         } else {
           const paramsChanged = existing.params_hash !== n.paramsHash || existing.display_name !== n.name
-          if (paramsChanged) {
-            this.deps.db
-              .update(nodesT)
-              .set({
-                display_name: n.name,
-                protocol: n.protocol,
-                params_hash: n.paramsHash,
-                outbound_json: JSON.stringify(n.outbound),
-                protocol_supported: n.protocolSupported ? 1 : 0,
-                last_seen_at: now,
-                updated_at: now,
-              })
-              .where(eq(nodesT.id, existing.id))
-              .run()
-            changed++
-          } else {
-            this.deps.db.update(nodesT).set({ last_seen_at: now, updated_at: now }).where(eq(nodesT.id, existing.id)).run()
-          }
+          this.deps.db
+            .update(nodesT)
+            .set({
+              // 改名/改参数才动展示列；三列 proxy_* 每次同步都按引擎回读刷新（它们描述数据面事实）
+              ...(paramsChanged
+                ? {
+                    display_name: n.name,
+                    protocol: n.protocol,
+                    params_hash: n.paramsHash,
+                    outbound_json: JSON.stringify(n.outbound),
+                  }
+                : {}),
+              protocol_supported: supported ? 1 : 0,
+              proxy_name: supported ? r.proxyName : null,
+              proxy_source: supported ? provider : null,
+              proxy_json: proxyJson,
+              last_seen_at: now,
+              updated_at: now,
+            })
+            .where(eq(nodesT.id, existing.id))
+            .run()
+          if (paramsChanged) changed++
           if (existing.missing_since !== null) {
             this.deps.db
               .update(nodesT)
@@ -427,15 +702,21 @@ export class SyncService {
           .set({
             missing_since: sql`COALESCE(${nodesT.missing_since}, ${now})`,
             stale_until: sql`COALESCE(${nodesT.stale_until}, ${staleUntil})`,
+            // provider 文件里已经没有它了：旧 proxy 名必须清掉，否则发布链路会指向不存在的 proxy
+            protocol_supported: 0,
+            proxy_name: null,
+            proxy_source: null,
+            proxy_json: null,
             updated_at: now,
           })
           .where(eq(nodesT.id, o.node_id))
           .run()
       }
 
-      // 写 node_sources
-      const byFingerprint = new Map(nodes.map((n) => [n.fingerprint, n]))
-      for (const n of nodes) {
+      // 写 node_sources（不可发布/引擎表达不了的节点也算「订阅提供过」，否则 UI 会凭空少节点）
+      const byFingerprint = new Map(resolved.map((r) => [r.node.fingerprint, r.node]))
+      for (const r of resolved) {
+        const n = r.node
         const nodeRow = this.deps.db.select({ id: nodesT.id }).from(nodesT).where(eq(nodesT.fingerprint, n.fingerprint)).get()
         if (!nodeRow) continue
         this.deps.db
@@ -492,17 +773,6 @@ export class SyncService {
       .run()
   }
 
-  private allocateId(name: string): string {
-    const existing = new Set(this.deps.db.select({ id: nodesT.id }).from(nodesT).all().map((r) => r.id.toLowerCase()))
-    const region = regionKey(name)
-    let seq = 1
-    while (true) {
-      const id = allocateNodeId(region, existing, seq)
-      if (!existing.has(id.toLowerCase())) return id
-      seq++
-      if (seq > 9999) throw new Error('节点 ID 分配失败')
-    }
-  }
 
   private failRun(
     runId: string,
