@@ -47,10 +47,11 @@ describe('迁移', () => {
     expect(runMigrations(db)).toBe(ALL_MIGRATIONS.length)
     expect(schemaVersion(db)).toBe(ALL_MIGRATIONS.length)
     const firstRun = tableNames(db)
-    // v1 的 26 张 + v4（engine-core）的 engine_slots / engine_ops
-    expect(firstRun).toHaveLength(28)
+    // v1 的 26 张 + v4（engine-core）的 engine_slots / engine_ops + v5 的 route_groups
+    expect(firstRun).toHaveLength(29)
     expect(firstRun).toContain('engine_slots')
     expect(firstRun).toContain('engine_ops')
+    expect(firstRun).toContain('route_groups')
 
     expect(runMigrations(db)).toBe(0)
     expect(schemaVersion(db)).toBe(ALL_MIGRATIONS.length)

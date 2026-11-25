@@ -15,6 +15,13 @@
       "when": 1793204479982,
       "tag": "0001_overjoyed_sersi",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795587725877,
+      "tag": "0002_glossy_vin_gonzales",
+      "breakpoints": true
     }
   ]
 }

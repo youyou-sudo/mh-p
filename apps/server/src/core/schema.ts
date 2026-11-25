@@ -454,6 +454,23 @@ export const nodeConnections = sqliteTable('node_connections', {
     index('idx_conns_started').on(table.started_at),
   ])
 
+/**
+ * 路由组：一组按国家字段正则圈定的节点，客户端用组 ID 作为用户名接入。
+ * balance_mode: 'balanced' = 均衡平均（轮询）；'sticky' = 固定一个直到拨号失败再切换。
+ * 组凭据独立于节点凭据：组成员会随正则/发布变化，密码必须挂在组上才稳定。
+ */
+export const routeGroups = sqliteTable('route_groups', {
+  id: text().primaryKey(),
+  name: text().notNull(),
+  country_regex: text('country_regex').notNull(),
+  balance_mode: text('balance_mode').notNull().default('balanced'),
+  enabled: integer().default(1).notNull(),
+  password_enc: text('password_enc').notNull(),
+  password_lookup_hash: text('password_lookup_hash').notNull(),
+  created_at: integer('created_at').notNull(),
+  updated_at: integer('updated_at').notNull(),
+})
+
 export const appliedNodes = sqliteTable('applied_nodes', {
   node_id: text('node_id').primaryKey(),
   outbound_tag: text('outbound_tag').notNull(),
@@ -499,6 +516,7 @@ export const schema = {
   gatewayRoutes,
   nodeConnections,
   appliedNodes,
+  routeGroups,
 } as const
 
 export type Tables = typeof schema
