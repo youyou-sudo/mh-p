@@ -131,6 +131,7 @@ interface Control {
   failures: string[]
   selfcheckRoute: number | null
   selfcheckUser: string
+  routeFailures: Array<{ username: string; nodeId: string }>
   logs: string[]
   route: Map<string, RouteTarget>
   password: Map<string, string>
@@ -166,6 +167,7 @@ function makeControl(listen: string, overrides: ConfigOverrides = {}): Control {
     failures: [],
     selfcheckRoute: null,
     selfcheckUser: '__selfcheck__',
+    routeFailures: [],
     logs: [],
     route: new Map(),
     password: new Map(),
@@ -189,6 +191,9 @@ function makeControl(listen: string, overrides: ConfigOverrides = {}): Control {
     },
     onAuthSuccess(ip: string) {
       c.successes.push(ip)
+    },
+    onRouteFailure(username: string, nodeId: string) {
+      c.routeFailures.push({ username, nodeId })
     },
     onOpen(info) {
       const id = c.onOpen.length + 1
@@ -665,6 +670,22 @@ describe('HTTP 代理', () => {
     expect(r.text.startsWith('HTTP/1.1 502')).toBe(true)
     expect(gw.listConnections().length).toBe(0)
     expect(c.onClose.length).toBe(0)
+  })
+
+  test('拨号失败会回执 onRouteFailure（路由组据此冷却节点）', async () => {
+    const deadPort = freePort() // 未监听
+    const c = makeControl('127.0.0.1:' + freePort(), { dialTimeoutMs: 800 })
+    // 组用户名指向一个永远拨不通的端口；组凭据已知
+    c.route.set('group-hk', { nodeId: 'hk1', port: deadPort })
+    c.password.set('group-hk', 'pw')
+    const gw = startGateway(c)
+
+    const r = await httpConnect(port(c), ['Proxy-Authorization: ' + basic('group-hk', 'pw')])
+    expect(r.text.startsWith('HTTP/1.1 502')).toBe(true)
+    // 只有拨号失败才回执，且带上被选中的成员节点
+    await waitFor(() => c.routeFailures.length === 1)
+    expect(c.routeFailures).toEqual([{ username: 'group-hk', nodeId: 'hk1' }])
+    expect(gw.listConnections().length).toBe(0)
   })
 
   test('超过每用户并发上限 → 429', async () => {

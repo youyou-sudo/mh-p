@@ -37,6 +37,8 @@ export interface GatewayDeps {
   isBanned(ip: string): boolean
   onAuthFailure(ip: string): void
   onAuthSuccess(ip: string): void
+  /** 拨号失败回执（路由组用它把节点标记为失效并冷却）；普通节点可忽略 */
+  onRouteFailure?(username: string, nodeId: string): void
   onOpen(info: {
     nodeId: string
     username: string

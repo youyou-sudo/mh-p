@@ -64,6 +64,8 @@ interface SessionState {
   nodeId: string
   /** 认证后解析到的环回端口 */
   routePort: number
+  /** 是否已上报过拨号失败（去重：connectError 与 catch 可能各触发一次） */
+  routeFailureReported: boolean
   target: string
   protocol: 'http' | 'socks5'
   startedAt: number
@@ -531,6 +533,7 @@ export class Gateway {
       username: '',
       nodeId: '',
       routePort: 0,
+      routeFailureReported: false,
       target: '',
       protocol: 'http',
       startedAt: now,
@@ -1156,6 +1159,16 @@ export class Gateway {
   /** 协议层失败（拨号/并发等）时按当前协议回错误并关闭 */
   private failRequest(s: SessionState, kind: 'dial' | 'concurrency' | 'error'): void {
     if (s.closed) return
+    // 仅「拨号失败」属于节点不可用：上报给路由组做 10 分钟冷却（隧道建立后的关闭不算）。
+    // connectError 与 Promise catch 可能对同一次拨号各触发一次 failRequest，这里按会话去重。
+    if (kind === 'dial' && s.username && !s.routeFailureReported) {
+      s.routeFailureReported = true
+      try {
+        this.deps.onRouteFailure?.(s.username, s.nodeId)
+      } catch (e) {
+        this.log('error', `onRouteFailure 回调异常: ${errText(e)}`)
+      }
+    }
     if (s.protocol === 'socks5') {
       this.socks5ReplyError(s, SOCKS5_REP_GENERAL_FAILURE)
       return
