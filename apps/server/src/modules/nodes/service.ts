@@ -182,6 +182,8 @@ export function createNodesService(ctx: AppContext) {
     ctx.db.delete(nodeStatus).where(eq(nodeStatus.node_id, nodeId)).run()
     ctx.db.delete(nodeCheckRuns).where(eq(nodeCheckRuns.node_id, nodeId)).run()
     ctx.db.delete(nodeAliases).where(or(eq(nodeAliases.node_id, nodeId), eq(nodeAliases.alias, nodeId))).run()
+    // 成员被删，路由组目录同步刷新（避免把流量指向已删除节点）
+    ctx.refreshRouteGroups()
     return { found: true, applied: hasApplied, closed }
   }
   return { purgeNodeRow }

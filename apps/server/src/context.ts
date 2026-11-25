@@ -3,6 +3,7 @@ import type { Db } from './core/db'
 import type { EventBus } from './core/events'
 import type { SettingsStore } from './core/settings'
 import type { RoutingTable } from './core/routing'
+import type { RouteGroupRegistry } from './core/route-groups'
 import type { ConnectionTracker } from './core/connlog'
 import type { AuthService } from './modules/auth/service'
 import type { JobQueue } from './jobs/queue'
@@ -81,6 +82,10 @@ export interface AppContext {
    */
   publish: (o?: { reason?: string; dryRun?: boolean }) => Promise<PublishOutcome>
   routing: RoutingTable
+  /** 路由组内存注册表：成员来自国家正则，选择/冷却状态在内存 */
+  routeGroups: RouteGroupRegistry
+  /** 刷新路由组节点目录（发布成功、节点国家/启用状态变更后调用） */
+  refreshRouteGroups: () => void
   conns: ConnectionTracker
   scheduler: Scheduler
   gateway: Gateway | null

@@ -53,6 +53,8 @@ export function nodesModule(ctx: AppContext, session: SessionPlugin, service: No
         if (Object.keys(patch).length === 0) return { ok: true }
         patch.updated_at = Date.now()
         db.update(nodesT).set(patch).where(eq(nodesT.id, params.id)).run()
+        // 国家/启用状态变化会影响路由组的候选成员，刷新内存目录
+        if (body.countryCode !== undefined || body.enabled !== undefined) ctx.refreshRouteGroups()
         auth.audit('panel', 'admin', 'node.update', params.id, null, body)
         return { ok: true }
       },

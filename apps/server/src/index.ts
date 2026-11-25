@@ -9,7 +9,7 @@
  * 进程只会按 -f 指定的文件构建 listener；而且 `-f` 指向不存在的文件时它会**自动创建默认配置**
  * 并"成功"启动（一个没有 external-controller 的假数据面），所以启动前我们必须自己把文件写好。
  */
-import { and, desc, eq, inArray, isNotNull, lt, notInArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNotNull, isNull, lt, notInArray, sql } from 'drizzle-orm'
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -68,18 +68,21 @@ import { openDb, type Db } from './core/db'
 import {
   admin,
   engineOps,
+  engineSlots,
   nodeAliases,
   nodeCheckRuns,
   nodeCredentials,
   nodeStatus,
   nodes as nodesT,
   revisionNodes,
+  routeGroups as routeGroupsT,
   runtimeRevisions,
 } from './core/schema'
 import { runMigrations, schemaVersion } from './core/migrations'
 import { SettingsStore } from './core/settings'
 import { EventBus } from './core/events'
 import { RoutingTable } from './core/routing'
+import { RouteGroupRegistry, loadRouteGroupConfigs } from './core/route-groups'
 import { ConnectionTracker } from './core/connlog'
 import { Semaphore } from './core/semaphore'
 import { logger } from './core/log'
@@ -116,6 +119,29 @@ async function main() {
   const settings = new SettingsStore(db)
   const events = new EventBus(db)
   const routing = new RoutingTable(db)
+
+  // 路由组：配置来自 DB，节点目录 = 已启用、协议可发布、已占槽位的节点。
+  const routeGroups = new RouteGroupRegistry()
+  const reloadRouteGroups = () => routeGroups.replaceConfigs(loadRouteGroupConfigs(db))
+  const refreshRouteGroupsCatalog = () => {
+    const rows = db
+      .select({ id: nodesT.id, country: nodesT.country_code, port: engineSlots.port })
+      .from(nodesT)
+      .innerJoin(engineSlots, eq(engineSlots.node_id, nodesT.id))
+      .where(
+        and(
+          eq(nodesT.enabled, 1),
+          eq(nodesT.protocol_supported, 1),
+          eq(nodesT.is_virtual, 0),
+          isNull(nodesT.missing_since),
+        ),
+      )
+      .all()
+    routeGroups.setCatalog(rows.map((r) => ({ nodeId: r.id, country: r.country, port: r.port })))
+  }
+  reloadRouteGroups()
+  refreshRouteGroupsCatalog()
+
   const conns = new ConnectionTracker(db, events)
   const jobs = new JobQueue(db, events)
   const auth = new AuthService({ db, settings, events })
@@ -262,7 +288,11 @@ async function main() {
   const publish = async (o: { reason?: string; dryRun?: boolean } = {}): Promise<PublishOutcome> => {
     const res = await publisher.publish(o)
     // 别名只在发布成功后补：发布失败时路由表保持原状，避免把别名指到错端口
-    if (!o.dryRun && res.ok) applyRoutingAliases()
+    if (!o.dryRun && res.ok) {
+      applyRoutingAliases()
+      // 槽位/节点集合可能变了，同步刷新路由组的候选目录
+      refreshRouteGroupsCatalog()
+    }
     return res
   }
 
@@ -353,14 +383,32 @@ async function main() {
   const gateway = new Gateway({
     getConfig: gatewayConfig,
     resolveRoute: (username: string) => {
+      // 路由组：按国家正则选一个成员节点（选择/冷却状态在内存注册表里）
+      if (routeGroups.isGroup(username)) {
+        const sel = routeGroups.resolve(username)
+        if (!sel) return undefined
+        return { nodeId: sel.nodeId, port: sel.port }
+      }
       const entry = routing.get(username)
       if (!entry) return undefined
       return { nodeId: entry.nodeId, port: entry.port, tag: entry.tag }
     },
     verifyCredential: (username: string, vxpfwhrw: string) => {
+      if (settings.get().gateway.authMode === 'username-only') {
+        return routeGroups.isGroup(username) || !!routing.get(username)
+      }
+      // 路由组的凭据挂在组上（成员随正则变化，不能借用某个节点的密码）
+      if (routeGroups.isGroup(username)) {
+        const g = db.select({ password_enc: routeGroupsT.password_enc }).from(routeGroupsT).where(eq(routeGroupsT.id, username)).get()
+        if (!g) return false
+        try {
+          return safeEqual(decryptSecret(g.password_enc), vxpfwhrw)
+        } catch {
+          return false
+        }
+      }
       const entry = routing.get(username)
       if (!entry) return false
-      if (settings.get().gateway.authMode === 'username-only') return true
       const row = db.select().from(nodeCredentials).where(eq(nodeCredentials.node_id, entry.nodeId)).get()
       if (!row) return false
       // 凭据密文列名在本仓库源文件里是脱敏字面量（写死会与 schema 真实属性名不一致），按后缀取
@@ -371,6 +419,10 @@ async function main() {
       } catch {
         return false
       }
+    },
+    onRouteFailure: (username: string, nodeId: string) => {
+      // 只有路由组需要「失败→冷却」；普通节点没有冷却语义
+      if (routeGroups.isGroup(username)) routeGroups.reportFailure(username, nodeId)
     },
     isBanned: (ip: string) => {
       const f = failures.get(ip)
@@ -637,6 +689,8 @@ async function main() {
     engineDir: ENGINE_DIR,
     engineConfigPath: CONFIG_PATH,
     routing,
+    routeGroups,
+    refreshRouteGroups: refreshRouteGroupsCatalog,
     conns,
     scheduler,
     gateway,
@@ -702,6 +756,9 @@ async function main() {
   // 从 DB 恢复网关路由表（§9.3 控制面重启）：发布成功时会被覆盖成权威值
   const restored = routing.restoreFromDb()
   logger.info('网关路由表已从数据库恢复 ' + restored + ' 条')
+  // 路由组配置与目录也在启动时重建（槽位表在发布后才有，这里先装载已有配置）
+  reloadRouteGroups()
+  refreshRouteGroupsCatalog()
 
   logger.info('[boot] 启动网关 ' + settings.get().gateway.listen)
   try {

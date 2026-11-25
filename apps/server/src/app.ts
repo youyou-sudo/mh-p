@@ -9,6 +9,7 @@ import { subscriptionsModule } from './modules/subscriptions'
 import { createSubscriptionsService } from './modules/subscriptions/service'
 import { nodesModule } from './modules/nodes'
 import { createNodesService } from './modules/nodes/service'
+import { routeGroupsModule } from './modules/route-groups'
 import { settingsModule } from './modules/settings'
 import { runtimeModule } from './modules/runtime'
 import { keysModule } from './modules/keys'
@@ -38,6 +39,7 @@ export function buildApp(ctx: AppContext) {
     .use(authModule(ctx, session))
     .use(subscriptionsModule(ctx, session, subscriptions))
     .use(nodesModule(ctx, session, nodes))
+    .use(routeGroupsModule(ctx, session))
     .use(settingsModule(ctx, session, subscriptions))
     .use(runtimeModule(ctx, session))
     .use(keysModule(ctx, session))
