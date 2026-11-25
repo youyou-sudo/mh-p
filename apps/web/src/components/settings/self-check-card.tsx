@@ -18,7 +18,7 @@ interface SelfCheckResult {
 }
 
 const TARGETS = [
-  { id: "xray", label: "数据面与 API", description: "xray 二进制版本 + API（lso）可达性", icon: Server },
+  { id: "engine", label: "数据面与 API", description: "Mihomo 二进制版本 + REST API 可达性", icon: Server },
   { id: "ports", label: "端口池可 bind", description: "端口池前 8 个端口逐个 bind 测试", icon: PlugZap },
   { id: "ipecho", label: "IP 查询源", description: "逐个请求 detect.ipEchoUrls", icon: Globe2 },
 ] as const
@@ -31,7 +31,7 @@ export function SelfCheckCard() {
   const [running, setRunning] = useState<string | null>(null)
   const [result, setResult] = useState<SelfCheckResult | null>(null)
   const [error, setError] = useState<unknown>(null)
-  const [failedTarget, setFailedTarget] = useState("xray")
+  const [failedTarget, setFailedTarget] = useState("engine")
 
   const run = async (target: string) => {
     setRunning(target)

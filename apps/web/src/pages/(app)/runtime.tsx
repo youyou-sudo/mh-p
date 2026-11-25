@@ -298,7 +298,7 @@ export function RuntimePage() {
     const conns = await readConns.run()
     const ok = await confirm({
       title: "重启数据面？",
-      description: "立即重启 Xray 并重放当前 revision 的期望状态。这是唯一会断开已建立连接的场景。",
+      description: "立即重启 Mihomo 并重放当前 revision 的期望状态。这是唯一会断开已建立连接的场景。",
       details: (
         <ul className="space-y-1">
           <li>
@@ -512,7 +512,7 @@ export function RuntimePage() {
             {data?.lastRevision ? <StatusBadge state={data.lastRevision.status} label={lastMeta.label} tone={lastMeta.tone} className="ml-1" /> : null}
           </CardTitle>
         }
-        description="来自 Xray API 的实时快照；对账就是拿它与期望状态做差集。"
+        description="来自 Mihomo API 的实时快照；对账就是拿它与期望状态做差集。"
         actions={
           dp?.digest ? (
             <Badge variant="outline" className="max-w-64 truncate font-mono text-[11px] font-normal" title={dp.digest}>
@@ -542,7 +542,7 @@ export function RuntimePage() {
                 {
                   label: "Rule",
                   value: dp?.rulesSupported === false ? "不支持枚举" : fmtNumber(dp?.ruleCount ?? 0),
-                  hint: dp?.rulesSupported === false ? "当前 Xray 构建不支持枚举规则" : "每节点一条路由规则",
+                  hint: dp?.rulesSupported === false ? "当前 Mihomo 构建不支持枚举规则" : "每节点一条路由规则",
                 },
                 { label: "快照时间", value: dp?.at ? <RelativeTime ts={dp.at} /> : "—", hint: "对账读取的时点" },
               ]}

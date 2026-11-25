@@ -114,7 +114,7 @@ const DEGRADATION_ROWS: { capability: string; gateway: string; direct: string }[
   { capability: "按用户并发 / 限流", gateway: "支持（每用户 + 每 IP）", direct: "只能按入站级策略" },
   { capability: "按用户流量统计", gateway: "网关自行统计", direct: "仅 HTTP 入站整体统计" },
   { capability: "额外一跳延迟", gateway: "+0.1~0.3 ms（环回）", direct: "0" },
-  { capability: "连接明细可观测性", gateway: "面板「网关」页可见", direct: "仅能看 Xray 日志" },
+  { capability: "连接明细可观测性", gateway: "面板「网关」页可见", direct: "仅能看 Mihomo 日志" },
 ]
 
 /** 直连模式的能力降级说明（PANEL.md §10.3）。 */
@@ -179,7 +179,7 @@ export function SecurityNote() {
         <ul className="mt-1 list-disc space-y-1 pl-4">
           <li>连接串里的用户名 / 密码等同于该节点的身份：拿到它就能以该节点出网，请按密码保管，不要公开分享。</li>
           <li>HTTP 代理的 Basic 凭据是明文：尽量只在 Docker 内网、VPN 或内网暴露网关端口；需要公网暴露时开启网关 TLS 或在前置反代做 TCP + TLS 终止。</li>
-          <li>数据面管理口（xray.apiAddress / metricsListen）与环回入站一律只绑 127.0.0.1，面板建议只在内网或反代后访问。</li>
+          <li>数据面管理口（engine.apiAddress）与环回入站一律只绑 127.0.0.1，面板建议只在内网或反代后访问。</li>
           <li>怀疑泄漏时：到「节点」页轮换凭据或在「网关」页踢掉连接；旧连接串会在下一次请求时失效。</li>
         </ul>
       </AlertDescription>

@@ -107,7 +107,7 @@ export function GatewayPage() {
   const kick = async (payload: KickPayload, what: string, affected: number) => {
     await confirm({
       title: "断开" + what + "？",
-      description: "网关会立即关闭匹配的 socket，客户端马上感知断开。这是网关独有的能力，Xray 本身无法枚举或断开连接。",
+      description: "网关会立即关闭匹配的 socket，客户端马上感知断开。这是网关独有的能力，Mihomo 本身无法按网关用户断开连接。",
       details: (
         <dl className="space-y-1.5 text-sm">
           <div className="flex items-center justify-between gap-4">

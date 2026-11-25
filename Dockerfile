@@ -10,7 +10,7 @@
 # amd64) and emits a foreign-arch binary. Buildx therefore needs no QEMU
 # emulation for linux/amd64 + linux/arm64.
 #
-# One script produces the whole product: scripts/build-exe.ts generates the
+# One script produces the whole product: scripts/build.ts generates the
 # shared API types, builds the Furin frontend and embeds it, downloads the
 # matching Mihomo release (SHA-256 taken from the GitHub release API, since
 # Mihomo publishes no .dgst), and compiles everything into a single executable.
@@ -19,11 +19,11 @@
 FROM --platform=$BUILDPLATFORM oven/bun:1.4.3-slim AS build
 
 # Predefined build arg. BuildKit only exposes TARGETARCH to a stage once it is
-# declared here, and build-exe.ts needs it to pick the cross-compile target.
+# declared here, and build.ts needs it to pick the cross-compile target.
 ARG TARGETARCH
 
 # Optional download mirror for the Mihomo release (e.g. https://ghfast.top/).
-# Empty is safe: build-exe.ts treats an empty mirror as "use the GitHub URL".
+# Empty is safe: build.ts treats an empty mirror as "use the GitHub URL".
 ARG MIHOMO_DOWNLOAD_MIRROR
 
 # Playwright is a devDependency for scripts/verify/web-e2e.ts, which never runs
@@ -51,7 +51,7 @@ COPY apps ./apps
 
 # 3) TARGETARCH (amd64|arm64) is understood directly by parseBuilderTarget, which
 #    maps it to both the Bun --target flag and the Mihomo release asset.
-RUN bun run scripts/build-exe.ts \
+RUN bun run scripts/build.ts \
       --target=bun-linux-$TARGETARCH \
       --outfile=out/mh-p
 

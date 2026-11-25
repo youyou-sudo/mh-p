@@ -2,7 +2,7 @@
  * L4 网关（PANEL.md §10.1，IMPL-CONTRACTS.md §3）。
  *
  * 单端口首字节分流：0x05 → SOCKS5，其余 → HTTP 代理。
- * 认证通过后与 127.0.0.1:<nodePort> 的 Xray http 入站建连，
+ * 认证通过后与 127.0.0.1:<nodePort> 的 Mihomo http 入站建连，
  * 把原始 CONNECT 请求转发过去，之后双向 splice（不再解析内容），只统计上下行字节。
  */
 import { readFileSync } from 'node:fs'
@@ -92,7 +92,7 @@ interface SessionState {
   /**
    * SOCKS5 专用：环回入站是 http 协议，会先回 "HTTP/1.1 200 Connection Established"。
    * 网关先读到这个响应头，确认隧道真的建立成功后才回 SOCKS5 成功码；
-   * 响应原文随后照常转发给客户端（与真实 Xray http 入站行为一致）。
+   * 响应原文随后照常转发给客户端（与真实 Mihomo http 入站行为一致）。
    * 非 null 表示正在等待/解析该响应头。
    */
   upstreamHead: Buffer | null
@@ -915,7 +915,7 @@ export class Gateway {
             }
             const headText = s.upstreamHead.subarray(0, idx).toString('latin1')
             // 环回入站的响应（HTTP 响应头 + 已到达的载荷）原样转发给客户端，
-            // 与真实 Xray http 入站的行为完全一致；下行字节从响应头第一个字节起计
+            // 与真实 Mihomo http 入站的行为完全一致；下行字节从响应头第一个字节起计
             const response = Buffer.from(s.upstreamHead)
             s.upstreamHead = null
             if (!/^HTTP\/1\.[01]\s+2\d\d/.test(headText)) {

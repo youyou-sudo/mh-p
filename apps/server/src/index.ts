@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
- * 在 `.cache/mihomo/<version>/<asset>/` 里找 `build:exe -- --fetch-only` 解出的二进制。
+ * 在 `.cache/mihomo/<version>/<asset>/` 里找 `build -- --fetch-only` 解出的二进制。
  *
  * 为什么需要：报错信息里的第 ③ 条修法就是「跑 --fetch-only」，但它把文件放进了 .cache，
  * 而解析顺序原本只看 PATH 与 ./.tools —— 于是跑完仍然报「找不到 Mihomo 二进制」（已被用户踩到）。
@@ -172,7 +172,7 @@ async function main() {
       resolvedAt = Date.now()
       return local
     }
-    // `bun run build:exe -- --fetch-only` 把发行包解到 .cache/mihomo/<version>/<asset>/mihomo[.exe]。
+    // `bun run build -- --fetch-only` 把发行包解到 .cache/mihomo/<version>/<asset>/mihomo[.exe]。
     // 这是报错信息里给开发者的第 ③ 条修法，解析器必须真能找到它，否则那条提示就是假的
     //（用户已经踩到过：跑完 --fetch-only 仍然报"找不到 Mihomo 二进制"）。
     const cached = findCachedMihomo(process.cwd())
@@ -689,10 +689,10 @@ async function main() {
       const hint = isPortConflict
         ? '\n  → 管理口（' + settings.get().engine.apiAddress + '）已被其他进程占用（常见为 Clash / Clash Verge / Mihomo Party 或残留 mihomo 进程）。' +
           '\n  → 在面板「系统设置 → external-controller 管理口（engine.apiAddress）」更换未占用端口并保存，然后于「运行配置」页点「重启数据面」；或释放该端口后重启。'
-        : '\n  → 用 bun run build:exe 重新打包（会内嵌对应平台的 Mihomo）；' +
+        : '\n  → 用 bun run build 重新打包（会内嵌对应平台的 Mihomo）；' +
           '或确认 DATA_DIR/bin 可写（内嵌二进制的解出目录）；' +
           '也可在面板「系统设置 → engine.binary」填入外部 mihomo 可执行文件绝对路径后，于「运行配置」页点「重启数据面」。' +
-          '\n  → 只是缺二进制时，执行 bun run build:exe -- --fetch-only 可以先把二进制下下来。'
+          '\n  → 只是缺二进制时，执行 bun run build -- --fetch-only 可以先把二进制下下来。'
       logger.error('数据面未启动（控制面继续运行）：' + reason + hint)
     }
   } else {
@@ -876,9 +876,9 @@ function probeBinary(candidate: string, source: string): { path: string; source:
 function mihomoNotFoundHint(configured: string): string {
   return (
     '找不到 Mihomo 二进制（当前配置：' + (configured || '(空)') + '）。三种修法：' +
-    '① 打包版：bun run build:exe（会内嵌对应平台的 Mihomo）；' +
+    '① 打包版：bun run build（会内嵌对应平台的 Mihomo）；' +
     '② 源码运行：设置 MIHOMO_BINARY 指向可执行文件，或把它放到 ./.tools/mihomo' + (process.platform === 'win32' ? '.exe' : '') + '；' +
-    '③ 只在下载：bun run build:exe -- --fetch-only 会把发行包下到 .cache/mihomo 并解出二进制。'
+    '③ 只在下载：bun run build -- --fetch-only 会把发行包下到 .cache/mihomo 并解出二进制。'
   )
 }
 

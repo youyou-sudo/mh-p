@@ -39,7 +39,7 @@ docker run -d --name mh-p \
 ### 源码运行
 
 需要 [Bun](https://bun.sh) 和一份 Mihomo 二进制（放到 `.tools/mihomo[.exe]`，或设 `MIHOMO_BINARY`；
-  只下载不编译：`bun run build:exe -- --fetch-only`）。
+  只下载不编译：`bun run build -- --fetch-only`）。
 
 ```bash
 bun install
@@ -87,11 +87,11 @@ bun run admin:password "你的新口令"   # 重置并吊销全部会话
 ## 构建单文件可执行
 
 ```bash
-bun run build:exe                              # 当前平台 → dist/mh-p[.exe]
-bun run build:exe -- --target=bun-linux-x64    # 交叉编译（也支持 arm64 / darwin / windows）
-bun run build:exe -- --mihomo-version=v1.19.33  # 换 Mihomo 版本
-bun run build:exe -- --fetch-only              # 只下载解出 Mihomo 到 .cache/mihomo（CI 预热）
-MIHOMO_DOWNLOAD_MIRROR=https://ghfast.top/ bun run build:exe  # GitHub 拉不动时走镜像
+bun run build                              # 当前平台 → dist/mh-p[.exe]
+bun run build -- --target=bun-linux-x64    # 交叉编译（也支持 arm64 / darwin / windows）
+bun run build -- --mihomo-version=v1.19.33  # 换 Mihomo 版本
+bun run build -- --fetch-only              # 只下载解出 Mihomo 到 .cache/mihomo（CI 预热）
+MIHOMO_DOWNLOAD_MIRROR=https://ghfast.top/ bun run build  # GitHub 拉不动时走镜像
 ```
 
 流程是：构建前端 → 内嵌 → 按目标平台下载 [Mihomo](https://github.com/MetaCubeX/mihomo/releases)

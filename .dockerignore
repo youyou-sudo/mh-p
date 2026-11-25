@@ -4,7 +4,7 @@
 node_modules
 **/node_modules
 
-# Xray 下载缓存：构建时按目标平台重新拉取并校验
+# Mihomo 下载缓存：构建时按目标平台重新拉取并校验
 .cache
 .bun-cache
 
@@ -21,7 +21,7 @@ packages/api-client/types
 # 整个镜像构建失败（已实测）。apps/web/dist 可以排除，因为 file-modules.d.ts
 # 里的 *.html 通配声明让 tsc 不去解析那些路径。
 
-# 运行时数据与本地 Xray 二进制
+# 运行时数据与本地 Mihomo 二进制
 data
 data-*
 .tools

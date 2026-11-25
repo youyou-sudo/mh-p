@@ -74,7 +74,7 @@ export class Scheduler {
   }
 }
 
-/** 维护窗口检查：每日 xray.maintenanceWindow 检查热操作计数（D5 / §13） */
+/** 维护窗口检查：每日 engine.maintenanceWindow 检查热操作计数（D5 / §13） */
 export function inMaintenanceWindow(window: string, now = new Date()): boolean {
   const m = /^(\d{1,2}):(\d{2})$/.exec(window)
   if (!m) return false

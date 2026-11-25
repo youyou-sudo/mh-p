@@ -58,12 +58,12 @@ yarn-error.log*
 package-lock.json
 **/*.bun
 
-# mh-p 运行时数据与本地 Xray 二进制（见 PANEL.md §14.1）
+# mh-p 运行时数据与本地 Mihomo 二进制
 /data/
 /apps/*/data/
 /.data-*/
 /.tools/
 /.dsh-ops/
 /.verify-run.log
-# 构建期下载并缓存的 Xray 发行包（scripts/build-exe.ts）
+# 构建期下载并缓存的 Mihomo 发行包（scripts/build.ts）
 /.cache/

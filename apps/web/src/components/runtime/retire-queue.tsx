@@ -83,7 +83,7 @@ export function RetireQueue({ items, loading }: { items: RetireItem[]; loading?:
         </Table>
       </div>
       <p className="text-[11px] leading-relaxed text-muted-foreground">
-        Xray 无法枚举已建立连接，因此这里只显示「延迟删除的估算窗口」，不代表精确的在途连接数。
+        此处只显示「延迟删除的估算窗口」，不代表精确的在途连接数。
       </p>
     </div>
   )

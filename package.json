@@ -26,8 +26,8 @@
     "verify:api": "bun run scripts/verify/smoke-api.ts",
     "admin:password": "bun run scripts/admin-password.ts",
     "db:generate": "bun run scripts/db-generate.ts",
-    "mihomo:fetch": "bun run scripts/build-exe.ts --fetch-only",
-    "build:exe": "bun run scripts/build-exe.ts"
+    "mihomo:fetch": "bun run scripts/build.ts --fetch-only",
+    "build": "bun run scripts/build.ts"
   },
   "devDependencies": {
     "@libsql/client": "^0.18.0",

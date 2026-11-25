@@ -172,7 +172,7 @@ export function AuditLogTable({ items, loading, empty }: { items: AuditItem[]; l
   )
 }
 
-/** xray_apply_ops：每次数据面调用一条，既是审计也是热操作计数的来源。 */
+/** engine_ops：每次数据面调用一条，既是审计也是热操作计数的来源。 */
 export function ApplyOpsTable({ items, loading, empty }: { items: ApplyOpItem[]; loading?: boolean; empty: ReactNode }) {
   const [expanded, setExpanded] = useState<string | null>(null)
   return (
@@ -286,8 +286,8 @@ export function ApplyOpsEmpty() {
   return (
     <EmptyState
       icon={Terminal}
-      title="暂无 xray_apply_ops 审计"
-      description="每次数据面调用（ado / rmo / adi / rmi / adrules / rmrules / replay）都会写一条记录，发布或对账后即可看到。"
+      title="暂无引擎操作审计"
+      description="每次数据面调用（reload / assign / test_config 等）都会写一条记录，发布或对账后即可看到。"
     />
   )
 }

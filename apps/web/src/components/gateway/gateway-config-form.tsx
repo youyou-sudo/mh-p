@@ -191,7 +191,7 @@ export function GatewayConfigForm({ config, loading, error, onRetry, onSaved, ac
       await confirm({
         title: "保存并重建网关 listener？",
         description:
-          "修改监听地址、启用状态或 TLS 配置会重建 listener：现有代理连接会被立即关闭，客户端需要重新连接。数据面（Xray）不受影响。",
+          "修改监听地址、启用状态或 TLS 配置会重建 listener：现有代理连接会被立即关闭，客户端需要重新连接。数据面（Mihomo）不受影响。",
         details: (
           <dl className="space-y-1.5 text-sm">
             <div className="flex items-center justify-between gap-4">

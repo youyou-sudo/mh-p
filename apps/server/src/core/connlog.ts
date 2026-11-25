@@ -17,7 +17,7 @@ export interface ActiveConn {
 
 /**
  * 网关连接表（PANEL.md D1 第 3 点 / §6.6 node_connections）：
- * Xray 没有连接枚举与踢线能力，连接态数据一律来自网关。
+ * 网关侧统一维护连接枚举与踢线能力，连接态数据一律来自网关。
  * 活跃快照每 30s 落库一次，关闭时写终态。
  */
 export class ConnectionTracker {

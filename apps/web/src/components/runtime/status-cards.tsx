@@ -99,7 +99,7 @@ export function HotOpsMeter({ hot, threshold }: { hot: number; threshold: number
       />
       <p className="text-xs leading-relaxed text-muted-foreground">
         {percent >= 100
-          ? "已超过阈值：Xray 的 RemoveHandler 不释放 mux/xudp 资源，请在维护窗口执行「重启数据面」并重放期望状态。"
+          ? "已超过阈值：建议在维护窗口执行「重启数据面」并重放期望状态。"
           : percent >= 80
             ? "接近阈值：建议在维护窗口安排一次重启 + 重放。"
             : "处于安全范围；每次 ado/rmo 都会累加计数。"}

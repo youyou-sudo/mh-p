@@ -3,7 +3,7 @@ name: Release
 # Auto-publish per-platform binaries to GitHub Releases.
 #
 # Each artifact is a single self-contained executable: the control plane, the
-# embedded Furin frontend, and the matching Mihomo release (scripts/build-exe.ts).
+# embedded Furin frontend, and the matching Mihomo release (scripts/build.ts).
 #
 # - On every push to master: bumps the *patch* version (v0.4.0 -> v0.4.1 -> ...)
 #   using the latest reachable `v*.*.*` tag as base, then creates that tag and
@@ -76,7 +76,7 @@ jobs:
         # `--cwd apps/server`.
         run: |
           set -euo pipefail
-          bun run scripts/build-exe.ts --target=bun-linux-x64 --fetch-only
+          bun run scripts/build.ts --target=bun-linux-x64 --fetch-only
           MIHOMO_BIN="$(find "$PWD/.cache/mihomo" -type f -name mihomo | head -n 1)"
           test -n "$MIHOMO_BIN"
           chmod +x "$MIHOMO_BIN"
@@ -134,7 +134,7 @@ jobs:
         # ADMIN_PASSWORD is deliberately NOT an --asset: the binary ships with
         # builtin defaults only, so no secret can be baked into a public asset.
         run: |
-          bun run scripts/build-exe.ts \
+          bun run scripts/build.ts \
             --target=${{ matrix.target }} \
             --outfile=dist/${{ matrix.artifact }}
 

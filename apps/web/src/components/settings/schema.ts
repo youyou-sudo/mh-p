@@ -131,10 +131,9 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
     ],
   },
   {
-    // 过渡期：engine 是 Mihomo 新链路，xray 组暂时保留（旧引擎代码仍读 xray.*），cutover 时统一删除。
     key: "engine",
-    title: "Mihomo 数据面（新）",
-    description: "Mihomo 二进制、external-controller、槽位容量与环回端口区间。过渡期与下方 Xray 组并存。",
+    title: "Mihomo 数据面",
+    description: "Mihomo 二进制、external-controller、槽位容量与环回端口区间。",
     icon: Server,
     fields: [
       {
@@ -208,7 +207,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
   {
     key: "direct",
     title: "直连模式（可选）",
-    description: "额外暴露 Xray 的 http + socks 入站，仅作网关故障时的旁路，能力有降级。",
+    description: "额外暴露 Mihomo 的 http + socks 入站，仅作网关故障时的旁路，能力有降级。",
     icon: Cable,
     fields: [
       { path: "enabled", label: "启用直连模式", type: "boolean", hint: "默认关闭。开启后凭据轮换需要重载数据面。" },

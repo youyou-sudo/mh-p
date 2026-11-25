@@ -10,7 +10,7 @@
     "start:fast": "bun run src/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test",
-    "test:sub": "bun test test/sub-parsers.test.ts test/xray-render.test.ts",
+    "test:sub": "bun test test/sub-parsers.test.ts test/mihomo-sub.test.ts",
     "test:gateway": "bun test test/gateway.test.ts"
   },
   "dependencies": {

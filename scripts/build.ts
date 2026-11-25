@@ -16,11 +16,11 @@
  * 校验 SHA256 后再交给 MihomoProcess 执行。
  *
  * 用法：
- *   bun run build:exe                                    # 当前平台
- *   bun run build:exe -- --target=bun-linux-x64          # 交叉编译
- *   bun run build:exe -- --mihomo-version=v1.19.33 --mirror=https://ghfast.top/
- *   MIHOMO_DOWNLOAD_MIRROR=https://ghfast.top/ bun run build:exe
- *   bun run build:exe -- --fetch-only                    # 只下载/解出 Mihomo，不编译
+ *   bun run build                                        # 当前平台
+ *   bun run build -- --target=bun-linux-x64              # 交叉编译
+ *   bun run build -- --mihomo-version=v1.19.33 --mirror=https://ghfast.top/
+ *   MIHOMO_DOWNLOAD_MIRROR=https://ghfast.top/ bun run build
+ *   bun run build -- --fetch-only                        # 只下载/解出 Mihomo，不编译
  */
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
@@ -236,7 +236,7 @@ function generatedModule(info: {
   if (!rel.startsWith('.')) rel = './' + rel
   return [
     '// @ts-nocheck',
-    '// 由 scripts/build-exe.ts 于 ' + new Date().toISOString() + ' 生成；编译结束后会恢复占位版本，请勿提交。',
+    '// 由 scripts/build.ts 于 ' + new Date().toISOString() + ' 生成；编译结束后会恢复占位版本，请勿提交。',
     'import mihomoBinary from ' + JSON.stringify(rel) + ' with { type: "file" }',
     '',
     'export interface EmbeddedMihomoInfo {',

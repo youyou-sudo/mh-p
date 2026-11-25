@@ -72,5 +72,5 @@ export function routeMeta(pathname: string): RouteMeta {
 }
 
 export const APP_NAME = "mh-p"
-export const APP_TAGLINE = "Xray 节点池管理面板"
+export const APP_TAGLINE = "Mihomo 节点池管理面板"
 export const PANEL_VERSION = "0.4.0"

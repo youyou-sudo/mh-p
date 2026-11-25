@@ -151,7 +151,7 @@ export function NodeDrawer({
     await confirm({
       title: "断开该节点的全部连接？",
       description:
-        "网关会立即关闭该节点所有已建立的 socket，客户端马上感知断开。这是网关独有的能力，Xray 本身无法枚举或断开连接。",
+        "网关会立即关闭该节点所有已建立的 socket，客户端马上感知断开。这是网关独有的能力，Mihomo 本身无法按网关用户断开连接。",
       details: <ImpactRows rows={[["影响节点", <span className="font-mono">{node.id}</span>], ["将断开连接", (connectionCount ?? "未知") + " 条"], ["数据面", "不受影响"]]} />,
       destructive: true,
       confirmText: "断开连接",

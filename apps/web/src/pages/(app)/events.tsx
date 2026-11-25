@@ -318,7 +318,7 @@ export function EventsPage() {
         <StatCard
           label="错误事件"
           value={levelCounts.error}
-          hint="发布失败、Xray 崩溃、API 不可达、端口池耗尽"
+          hint="发布失败、Mihomo 崩溃、API 不可达、端口池耗尽"
           icon={ScrollText}
           tone="down"
           loading={events.loading && !events.data}

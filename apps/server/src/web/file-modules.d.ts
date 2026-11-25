@@ -35,7 +35,7 @@ declare module "*.json" {
   const path: string
   export default path
 }
-// 内嵌 Xray 二进制（scripts/build-exe.ts 生成 embedded.generated.ts 时使用）
+// 内嵌 Mihomo 二进制（scripts/build.ts 生成 embedded.generated.ts 时使用）
 declare module "*.bin" {
   const path: string
   export default path
