@@ -12,8 +12,9 @@
 #
 # One script produces the whole product: scripts/build-exe.ts generates the
 # shared API types, builds the Furin frontend and embeds it, downloads the
-# matching Xray release (SHA2-256 verified from the .dgst), and compiles
-# everything into a single executable. Nothing but that binary is kept.
+# matching Mihomo release (SHA-256 taken from the GitHub release API, since
+# Mihomo publishes no .dgst), and compiles everything into a single executable.
+# Nothing but that binary is kept.
 # ---------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM oven/bun:1.4.3-slim AS build
 
@@ -21,14 +22,14 @@ FROM --platform=$BUILDPLATFORM oven/bun:1.4.3-slim AS build
 # declared here, and build-exe.ts needs it to pick the cross-compile target.
 ARG TARGETARCH
 
-# Optional download mirror for the Xray release (e.g. https://ghfast.top/).
+# Optional download mirror for the Mihomo release (e.g. https://ghfast.top/).
 # Empty is safe: build-exe.ts treats an empty mirror as "use the GitHub URL".
-ARG XRAY_DOWNLOAD_MIRROR
+ARG MIHOMO_DOWNLOAD_MIRROR
 
 # Playwright is a devDependency for scripts/verify/web-e2e.ts, which never runs
 # during an image build. Skipping its browser download saves ~500 MB of CI time.
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
-    XRAY_DOWNLOAD_MIRROR=${XRAY_DOWNLOAD_MIRROR} \
+    MIHOMO_DOWNLOAD_MIRROR=${MIHOMO_DOWNLOAD_MIRROR} \
     NODE_ENV=production
 
 WORKDIR /app
@@ -48,11 +49,11 @@ COPY scripts ./scripts
 COPY packages ./packages
 COPY apps ./apps
 
-# 3) TARGETARCH (amd64|arm64) is understood directly by parseBuildTarget, which
-#    maps it to both the Bun --target flag and the Xray release asset.
+# 3) TARGETARCH (amd64|arm64) is understood directly by parseBuilderTarget, which
+#    maps it to both the Bun --target flag and the Mihomo release asset.
 RUN bun run scripts/build-exe.ts \
       --target=bun-linux-$TARGETARCH \
-      --outfile=out/xc-p
+      --outfile=out/mh-p
 
 # distroless has no shell or mkdir, so stage the writable data dir here and copy
 # it in below with the right ownership.
@@ -63,12 +64,12 @@ RUN mkdir -p /staged-data
 # ---------------------------------------------------------------------------
 FROM gcr.io/distroless/base-debian12
 
-LABEL org.opencontainers.image.title="xc-p" \
-      org.opencontainers.image.description="Xray-core 节点池管理面板"
+LABEL org.opencontainers.image.title="mh-p" \
+      org.opencontainers.image.description="Mihomo 节点池管理面板"
 
 WORKDIR /app
 
-COPY --from=build --chown=nonroot:nonroot /app/out/xc-p /app/xc-p
+COPY --from=build --chown=nonroot:nonroot /app/out/mh-p /app/mh-p
 COPY --from=build --chown=nonroot:nonroot /staged-data /data
 
 # PANEL_HOST defaults to localhost in apps/server/src/config.ts, which would make
@@ -79,8 +80,8 @@ ENV NODE_ENV=production \
     PANEL_PORT=8080 \
     TZ=Asia/Shanghai
 
-# Every port xc-p binds is well above 1024 (panel 8080, gateway 7890, xray api 8501,
-# node inbound pool 24000-28999), so unprivileged execution is safe.
+# Every port mh-p binds is well above 1024 (panel 8080, gateway 7890, engine REST
+# controller, per-slot listeners 24000-28999), so unprivileged execution is safe.
 USER nonroot
 
 VOLUME ["/data"]
@@ -91,10 +92,11 @@ EXPOSE 7890
 
 # Paired with the `healthcheck` subcommand in apps/server/src/index.ts: the
 # distroless base has no curl/wget/shell, so the probe has to ship inside the
-# binary. start-period covers the first Xray extraction + data-plane boot.
+# binary. start-period covers the first Mihomo extraction (~58 MB, v1.19.33)
+# plus the data-plane boot.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD ["/app/xc-p", "healthcheck"]
+  CMD ["/app/mh-p", "healthcheck"]
 
-ENTRYPOINT ["/app/xc-p"]
+ENTRYPOINT ["/app/mh-p"]
 
 # I have nothing but my burger and I want nothing more

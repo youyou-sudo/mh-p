@@ -1,8 +1,8 @@
 {
-  "name": "xc-p",
+  "name": "mh-p",
   "version": "0.4.0",
   "private": true,
-  "description": "xc-p · Xray-core 节点池管理面板（monorepo）",
+  "description": "mh-p · Mihomo 节点池管理面板（monorepo）",
   "type": "module",
   "workspaces": [
     "apps/*",
@@ -22,13 +22,11 @@
     "test": "bun run --cwd apps/server test",
     "test:sub": "bun run --cwd apps/server test:sub",
     "test:gateway": "bun run --cwd apps/server test:gateway",
-    "p0:hot-apply": "bun run scripts/p0-hot-apply-check.ts",
-    "verify:all": "bun run scripts/verify/run-all.ts",
     "verify:web": "bun run scripts/verify/web-e2e.ts",
     "verify:api": "bun run scripts/verify/smoke-api.ts",
     "admin:password": "bun run scripts/admin-password.ts",
     "db:generate": "bun run scripts/db-generate.ts",
-    "xray:fetch": "bun run scripts/build-exe.ts --fetch-only",
+    "mihomo:fetch": "bun run scripts/build-exe.ts --fetch-only",
     "build:exe": "bun run scripts/build-exe.ts"
   },
   "devDependencies": {

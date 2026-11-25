@@ -1,38 +1,42 @@
 /**
- * 打包单文件可执行（bun build --compile），并把对应平台的 Xray 一起嵌进去。
+ * 打包单文件可执行（bun build --compile），并把对应平台的 Mihomo 一起嵌进去。
  *
  * 流程：
  *   1. 解析目标平台（--target=bun-windows-x64 / bun-linux-x64 / bun-linux-arm64 / bun-darwin-arm64 …，
  *      省略时用当前构建机）；
  *   2. 构建 Furin 前端并嵌入控制面（--skip-web 可跳过）；
- *   3. 从 XTLS/Xray-core 下载该平台发行包（默认 v26.3.27，--xray-version 可换），
- *      用 .dgst 的 SHA2-256 校验压缩包，取出 xray[.exe] 并缓存到 .cache/xray/；
- *   4. 生成 apps/server/src/xray/embedded.generated.ts（`with { type: "file" }`）；
+ *   3. 从 MetaCubeX/mihomo 下载该平台发行包（默认 v1.19.33，--mihomo-version 可换）：
+ *      windows 是 zip（包内 mihomo-windows-amd64.exe），linux/darwin 是**裸 gzip**（解压即二进制）；
+ *      校验用的 SHA256 来自 GitHub Release API 的 asset.digest 字段（Mihomo 不发布 .dgst），
+ *      取不到元数据时降级为「只记录压缩包哈希」并显式警告；
+ *   4. 生成 apps/server/src/mihomo/embedded.generated.ts（`with { type: "file" }`）；
  *   5. `bun build --compile` 打单文件；最后把生成文件恢复为占位版本（源码运行无内嵌二进制）。
  *
- * 运行时 embedded.ts 会把内嵌的 xray 解出到 DATA_DIR/bin 并校验 SHA256 后再执行。
+ * 运行时 apps/server/src/mihomo/embedded.ts 会把内嵌的 mihomo 解出到 DATA_DIR/bin，
+ * 校验 SHA256 后再交给 MihomoProcess 执行。
  *
  * 用法：
- *   bun run build:exe                                  # 当前平台
- *   bun run build:exe -- --target=bun-linux-x64        # 交叉编译
- *   bun run build:exe -- --xray-version=v26.3.27 --mirror=https://ghfast.top/
- *   XRAY_DOWNLOAD_MIRROR=https://ghfast.top/ bun run build:exe
- *   bun run build:exe -- --fetch-only                  # 只下载/解出 Xray，不编译
+ *   bun run build:exe                                    # 当前平台
+ *   bun run build:exe -- --target=bun-linux-x64          # 交叉编译
+ *   bun run build:exe -- --mihomo-version=v1.19.33 --mirror=https://ghfast.top/
+ *   MIHOMO_DOWNLOAD_MIRROR=https://ghfast.top/ bun run build:exe
+ *   bun run build:exe -- --fetch-only                    # 只下载/解出 Mihomo，不编译
  */
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import {
-  DEFAULT_XRAY_VERSION,
-  extractZipEntry,
-  parseBuildTarget,
-  parseDigestSha256,
-  xrayReleaseAsset,
-  type XrayBuildTarget,
-} from '../apps/server/src/xray/release'
+  DEFAULT_MIHOMO_VERSION,
+  extractBinaryFromArchive,
+  mihomoReleaseAsset,
+  parseBuilderTarget,
+  parseReleaseDigests,
+  versionBody,
+  type MihomoBuildTarget,
+} from '../apps/server/src/mihomo/release'
 
 const root = resolve(import.meta.dir, '..')
-const generatedPath = join(root, 'apps', 'server', 'src', 'xray', 'embedded.generated.ts')
+const generatedPath = join(root, 'apps', 'server', 'src', 'mihomo', 'embedded.generated.ts')
 
 // ------------------------------------------------------------------ 参数
 const argv = process.argv.slice(2)
@@ -51,7 +55,7 @@ function flag(name: string): boolean {
 }
 
 function positionalTarget(): string | undefined {
-  const withValue = new Set(['--xray-version', '--mirror', '--outfile', '--target'])
+  const withValue = new Set(['--mihomo-version', '--mirror', '--outfile', '--target'])
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!
     if (a.startsWith('--')) {
@@ -63,12 +67,14 @@ function positionalTarget(): string | undefined {
   return undefined
 }
 
-const targetArg = arg('target') ?? process.env.XCP_BUILD_TARGET ?? positionalTarget()
-const xrayVersion = arg('xray-version') ?? process.env.XRAY_VERSION ?? DEFAULT_XRAY_VERSION
-const mirror = arg('mirror') ?? process.env.XRAY_DOWNLOAD_MIRROR
+const targetArg = arg('target') ?? process.env.MHP_BUILD_TARGET ?? positionalTarget()
+const mihomoVersion = arg('mihomo-version') ?? process.env.MIHOMO_VERSION ?? DEFAULT_MIHOMO_VERSION
+const mirror = arg('mirror') ?? process.env.MIHOMO_DOWNLOAD_MIRROR
 const offline = flag('offline')
 const skipWeb = flag('skip-web')
 const fetchOnly = flag('fetch-only')
+/** 跳过「官方摘要」校验（离线/API 不可用时仍能产出，但会在日志里大声警告） */
+const noDigest = flag('no-digest')
 
 // ------------------------------------------------------------------ 工具
 function sha256Hex(data: Uint8Array): string {
@@ -108,7 +114,7 @@ async function fetchOk(url: string, label: string, attempts = 3): Promise<Respon
     try {
       const res = await fetch(url, {
         signal: AbortSignal.timeout(300_000),
-        headers: { 'user-agent': 'xc-p-build' },
+        headers: { 'user-agent': 'mh-p-build', accept: 'application/vnd.github+json, */*' },
       })
       if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText)
       return res
@@ -123,66 +129,94 @@ async function fetchOk(url: string, label: string, attempts = 3): Promise<Respon
   throw new Error(label + ' 获取失败：' + (last instanceof Error ? last.message : String(last)))
 }
 
-function releaseUrl(asset: string): string {
-  return 'https://github.com/XTLS/Xray-core/releases/download/' + xrayVersion + '/' + asset
+function releaseBase(): string {
+  return 'https://github.com/MetaCubeX/mihomo/releases/download/' + mihomoVersion + '/'
 }
 
-/** 下载（或复用缓存）Xray 发行 zip，并用 .dgst 校验 SHA2-256。 */
-async function ensureZip(assetName: string): Promise<Buffer> {
-  const cacheDir = join(root, '.cache', 'xray', xrayVersion)
-  const zipPath = join(cacheDir, assetName)
-  const dgstPath = zipPath + '.dgst'
+/**
+ * 取本版本的「资产名 → sha256」。
+ *
+ * Mihomo **不发布 .dgst**（Xray 才有），官方摘要只在 GitHub Release API 里：
+ * 每个 asset 带 `digest: "sha256:<hex>"`（v1.19.33 实测每个资产都有）。API 不可达
+ * （离线/限流/内网）时返回空表，由调用方降级处理。元数据缓存到 .cache 里，离线可复用。
+ */
+async function releaseDigests(cacheDir: string): Promise<Record<string, string>> {
   mkdirSync(cacheDir, { recursive: true })
-
-  // 1) .dgst（小文件；缓存优先，离线时允许缺失）
-  let digestText: string | null = null
-  if (existsSync(dgstPath)) {
-    digestText = readFileSync(dgstPath, 'utf8')
-  } else if (!offline) {
+  const metaPath = join(cacheDir, 'release.json')
+  let text: string | null = existsSync(metaPath) ? readFileSync(metaPath, 'utf8') : null
+  if (!text && !offline) {
     try {
-      const res = await fetchOk(mirrorUrl(releaseUrl(assetName + '.dgst')), assetName + '.dgst')
-      digestText = await res.text()
-      writeFileSync(dgstPath, digestText)
+      const url = 'https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/' + mihomoVersion
+      const headers: Record<string, string> = { 'user-agent': 'mh-p-build', accept: 'application/vnd.github+json' }
+      const token = process.env.GITHUB_TOKEN
+      if (token) headers.authorization = 'Bearer ' + token
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(60_000) })
+      if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText)
+      text = await res.text()
+      writeFileSync(metaPath, text)
     } catch (e) {
-      console.warn('[build] 未取到 .dgst（将跳过 SHA256 校验）：' + (e instanceof Error ? e.message : String(e)))
+      console.warn('[build] 未能取到 release 元数据（官方 sha256 不可用）：' + (e instanceof Error ? e.message : String(e)))
+      return {}
     }
   }
-  const expected = digestText ? parseDigestSha256(digestText) : null
+  if (!text) return {}
+  try {
+    return parseReleaseDigests(JSON.parse(text))
+  } catch {
+    console.warn('[build] release.json 解析失败，忽略官方摘要')
+    return {}
+  }
+}
 
-  // 2) zip：缓存命中且哈希一致则复用
-  let bytes: Buffer | null = existsSync(zipPath) ? readFileSync(zipPath) : null
+/** 下载（或复用缓存）发行包，并用官方 sha256 校验；返回压缩包字节与解出二进制。 */
+async function ensureArchive(
+  assetName: string,
+  expected: string | null,
+  cacheDir: string,
+): Promise<Uint8Array> {
+  const path = join(cacheDir, assetName)
+  mkdirSync(cacheDir, { recursive: true })
+
+  let bytes: Uint8Array | null = existsSync(path) ? new Uint8Array(readFileSync(path)) : null
   if (bytes && expected && sha256Hex(bytes) !== expected) {
-    console.warn('[build] 缓存压缩包校验失败，重新下载：' + zipPath)
+    console.warn('[build] 缓存压缩包校验失败，重新下载：' + path)
     bytes = null
   }
   if (!bytes) {
-    if (offline) throw new Error('离线模式下缺少缓存：' + zipPath)
-    const url = mirrorUrl(releaseUrl(assetName))
+    if (offline) throw new Error('离线模式下缺少缓存：' + path)
+    const url = mirrorUrl(releaseBase() + assetName)
     log('下载 ' + assetName + ' ← ' + url)
     const res = await fetchOk(url, assetName)
-    bytes = Buffer.from(await res.arrayBuffer())
+    bytes = new Uint8Array(await res.arrayBuffer())
     const actual = sha256Hex(bytes)
     if (expected && actual !== expected) {
-      throw new Error('Xray 发行包 SHA256 校验失败：' + actual + ' != ' + expected)
+      throw new Error('Mihomo 发行包 SHA256 校验失败：' + actual + ' != ' + expected)
     }
-    writeFileSync(zipPath + '.part', bytes)
-    renameSync(zipPath + '.part', zipPath)
-    log('已缓存 ' + zipPath + '（' + mb(bytes.byteLength) + '）')
+    writeFileSync(path + '.part', bytes)
+    renameSync(path + '.part', path)
+    log('已缓存 ' + path + '（' + mb(bytes.byteLength) + '）')
   } else {
-    log('使用缓存 ' + zipPath + '（' + mb(bytes.byteLength) + '）')
+    log('使用缓存 ' + path + '（' + mb(bytes.byteLength) + '）')
   }
 
-  if (expected) log('SHA2-256 校验通过：' + expected)
+  if (expected) log('官方 SHA256 校验通过：' + expected)
+  else log('⚠ 无官方摘要可比对，本次只记录解出二进制的 sha256（运行时按记录值校验）')
   return bytes
 }
 
-/** 取出版本包里的 xray 可执行文件，并缓存到 .cache/xray/<version>/<asset>/<binary>。 */
-function extractBinary(zip: Uint8Array, assetName: string, binaryName: string): { path: string; bytes: Uint8Array } {
-  const data = extractZipEntry(zip, binaryName)
-  if (data.byteLength < 1024 * 1024) throw new Error('解出的 ' + binaryName + ' 只有 ' + data.byteLength + ' 字节，疑似损坏')
-  const dir = join(root, '.cache', 'xray', xrayVersion, assetName.replace(/\.zip$/, ''))
+/** 解出引擎二进制并缓存到 .cache/mihomo/<version>/<asset 基名>/mihomo[.exe]。 */
+function extractBinary(
+  archive: Uint8Array,
+  asset: { assetName: string; archive: 'zip' | 'gz'; binaryName: 'mihomo' | 'mihomo.exe' },
+  cacheDir: string,
+): { path: string; bytes: Uint8Array } {
+  const data = extractBinaryFromArchive(archive, asset.archive)
+  if (data.byteLength < 1024 * 1024) {
+    throw new Error('解出的 ' + asset.binaryName + ' 只有 ' + data.byteLength + ' 字节，疑似损坏')
+  }
+  const dir = join(cacheDir, asset.assetName.replace(/\.(zip|gz)$/, ''))
   mkdirSync(dir, { recursive: true })
-  const path = join(dir, binaryName)
+  const path = join(dir, asset.binaryName)
   writeFileSync(path, data)
   if (process.platform !== 'win32') chmodSync(path, 0o755)
   return { path, bytes: data }
@@ -203,24 +237,24 @@ function generatedModule(info: {
   return [
     '// @ts-nocheck',
     '// 由 scripts/build-exe.ts 于 ' + new Date().toISOString() + ' 生成；编译结束后会恢复占位版本，请勿提交。',
-    'import xrayBinary from ' + JSON.stringify(rel) + ' with { type: "file" }',
+    'import mihomoBinary from ' + JSON.stringify(rel) + ' with { type: "file" }',
     '',
-    'export interface EmbeddedXrayInfo {',
+    'export interface EmbeddedMihomoInfo {',
     '  file: string',
     '  version: string',
     "  platform: 'win32' | 'linux' | 'darwin'",
     "  arch: 'x64' | 'arm64' | 'arm'",
-    "  filename: 'xray' | 'xray.exe'",
+    "  filename: 'mihomo' | 'mihomo.exe'",
     '  sha256: string',
     '  size: number',
     '}',
     '',
-    'export const EMBEDDED_XRAY: EmbeddedXrayInfo = {',
-    '  file: xrayBinary as unknown as string,',
+    'export const EMBEDDED_MIHOMO: EmbeddedMihomoInfo = {',
+    '  file: mihomoBinary as unknown as string,',
     '  version: ' + JSON.stringify(info.version) + ',',
-    '  platform: ' + JSON.stringify(info.platform) + ' as EmbeddedXrayInfo["platform"],',
-    '  arch: ' + JSON.stringify(info.arch) + ' as EmbeddedXrayInfo["arch"],',
-    '  filename: ' + JSON.stringify(info.filename) + ' as EmbeddedXrayInfo["filename"],',
+    '  platform: ' + JSON.stringify(info.platform) + ' as EmbeddedMihomoInfo["platform"],',
+    '  arch: ' + JSON.stringify(info.arch) + ' as EmbeddedMihomoInfo["arch"],',
+    '  filename: ' + JSON.stringify(info.filename) + ' as EmbeddedMihomoInfo["filename"],',
     '  sha256: ' + JSON.stringify(info.sha256) + ',',
     '  size: ' + String(info.size) + ',',
     '}',
@@ -228,12 +262,12 @@ function generatedModule(info: {
   ].join('\n')
 }
 
-function outputBase(target: XrayBuildTarget): string {
+function outputBase(target: MihomoBuildTarget): string {
   const explicit = arg('outfile')
   if (explicit) return explicit
-  if (target.native) return 'dist/xc-p'
+  if (target.native) return 'dist/mh-p'
   const os = target.platform === 'win32' ? 'windows' : target.platform
-  return 'dist/xc-p-' + os + '-' + target.arch
+  return 'dist/mh-p-' + os + '-' + target.arch
 }
 
 function statOutput(outBase: string): string | null {
@@ -250,23 +284,30 @@ function statOutput(outBase: string): string | null {
 
 // ------------------------------------------------------------------ 主流程
 async function main(): Promise<void> {
-  const target = parseBuildTarget(targetArg)
+  const target = parseBuilderTarget(targetArg)
   log(
     '目标平台：' + target.platform + '/' + target.arch +
       (target.native ? '（当前构建机）' : '（交叉编译 ' + target.bunTarget + '）') +
-      ' · Xray ' + xrayVersion,
+      ' · Mihomo ' + mihomoVersion,
   )
-  const { assetName, binaryName } = xrayReleaseAsset(target)
+  const asset = mihomoReleaseAsset(target, mihomoVersion)
+  const cacheDir = join(root, '.cache', 'mihomo', versionBody(mihomoVersion))
 
   if (!skipWeb && !fetchOnly) {
     log('构建前端并嵌入控制面')
     await run(['bun', 'run', 'web:build'])
   }
 
-  const zip = await ensureZip(assetName)
-  const binary = extractBinary(zip, assetName, binaryName)
+  const digests = noDigest ? {} : await releaseDigests(cacheDir)
+  const expected = digests[asset.assetName] ?? null
+  if (!noDigest && !expected) {
+    console.warn('[build] ⚠ release 元数据里没有 ' + asset.assetName + ' 的 sha256，本次不做官方摘要校验')
+  }
+
+  const archive = await ensureArchive(asset.assetName, expected, cacheDir)
+  const binary = extractBinary(archive, asset, cacheDir)
   const sha256 = sha256Hex(binary.bytes)
-  log('Xray 二进制：' + binary.path + '（' + mb(binary.bytes.byteLength) + '，sha256=' + sha256.slice(0, 12) + '…）')
+  log('Mihomo 二进制：' + binary.path + '（' + mb(binary.bytes.byteLength) + '，sha256=' + sha256.slice(0, 12) + '…）')
 
   if (fetchOnly) {
     log('--fetch-only：跳过编译')
@@ -276,10 +317,10 @@ async function main(): Promise<void> {
   const stub = readFileSync(generatedPath, 'utf8')
   const module_ = generatedModule({
     path: binary.path,
-    version: xrayVersion,
+    version: mihomoVersion,
     platform: target.platform,
     arch: target.arch,
-    filename: binaryName,
+    filename: asset.binaryName,
     sha256,
     size: binary.bytes.byteLength,
   })
@@ -299,7 +340,7 @@ async function main(): Promise<void> {
     ])
     const out = statOutput(outBase)
     if (!out) throw new Error('编译结束但未找到产物：' + outBase)
-    log('完成：' + out + '（' + mb(statSync(out).size) + '，含内嵌 Xray ' + xrayVersion + '）')
+    log('完成：' + out + '（' + mb(statSync(out).size) + '，含内嵌 Mihomo ' + mihomoVersion + '）')
   } finally {
     writeFileSync(generatedPath, stub)
     log('已恢复 embedded.generated.ts 占位版本')
@@ -312,4 +353,3 @@ await main().catch((e) => {
 })
 
 // I have nothing but my burger and I want nothing more
-

@@ -97,22 +97,22 @@ jobs:
       matrix:
         include:
           - target: bun-linux-x64
-            artifact: xc-p-linux-x64
+            artifact: mh-p-linux-x64
             smoke: true
           - target: bun-linux-arm64
-            artifact: xc-p-linux-arm64
+            artifact: mh-p-linux-arm64
             smoke: false
           - target: bun-windows-x64
-            artifact: xc-p-windows-x64.exe
+            artifact: mh-p-windows-x64.exe
             smoke: false
           - target: bun-windows-arm64
-            artifact: xc-p-windows-arm64.exe
+            artifact: mh-p-windows-arm64.exe
             smoke: false
           - target: bun-darwin-x64
-            artifact: xc-p-darwin-x64
+            artifact: mh-p-darwin-x64
             smoke: false
           - target: bun-darwin-arm64
-            artifact: xc-p-darwin-arm64
+            artifact: mh-p-darwin-arm64
             smoke: false
 
     steps:
@@ -152,9 +152,9 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/smoke
           chmod +x dist/${{ matrix.artifact }}
-          cp dist/${{ matrix.artifact }} /tmp/smoke/xc-p
+          cp dist/${{ matrix.artifact }} /tmp/smoke/mh-p
           cd /tmp/smoke
-          ./xc-p &
+          ./mh-p &
           pid=$!
           # Stop the server on every exit path, including a failed assertion.
           trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
@@ -177,7 +177,7 @@ jobs:
           # server. Note it gates on panel liveness + SQLite, NOT on
           # `overall`, which reports data-plane state and may be `degraded`
           # for perfectly normal reasons (empty port pool, gateway disabled).
-          ./xc-p healthcheck
+          ./mh-p healthcheck
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v6
@@ -351,7 +351,7 @@ jobs:
           `0.0.0.0:7890`) apply when no environment variables are set.
 
           ```sh
-          DATA_DIR=./data PANEL_PORT=8080 ADMIN_PASSWORD='your-password' ./xc-p-linux-x64
+          DATA_DIR=./data PANEL_PORT=8080 ADMIN_PASSWORD='your-password' ./mh-p-linux-x64
           ```
 
           Other useful variables: `PANEL_HOST` (panel bind address),

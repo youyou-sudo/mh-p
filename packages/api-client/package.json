@@ -1,9 +1,9 @@
 {
-  "name": "@xc-p/api-client",
+  "name": "@mh-p/api-client",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "xc-p 前后端共享的 Eden Treaty 客户端（复用后端 Elysia 路由类型）",
+  "description": "mh-p 前后端共享的 Eden Treaty 客户端（复用后端 Elysia 路由类型）",
   "exports": {
     ".": "./src/index.ts"
   },

@@ -1,4 +1,4 @@
-# xc-p 前端（apps/web/）开发约定与参考
+# mh-p 前端（apps/web/）开发约定与参考
 
 > 本文件是并行开发契约。**先读本文件，再读同目录的参考实现**。
 > 设计权威：仓库根 `PANEL.md` §12；组件与字段以本目录当前实现为准。
@@ -7,10 +7,10 @@
 
 - Furin（`@teyik0/furin`）+ React 19 + Elysia（dev server 内）+ Tailwind v4 + shadcn/ui。
 - 视觉一律使用 **shadcn 默认样式**：主题 token、字体、圆角沿用 `globals.css` 的默认 slate 主题，不自定义品牌色/字体/渐变；状态色只用语义 token（`success/warning/destructive`）。
-- 仓库是 **Bun workspaces monorepo**：`apps/web/` 是 `@xc-p/web` 工作区，API 客户端在 `packages/api-client`。
+- 仓库是 **Bun workspaces monorepo**：`apps/web/` 是 `@mh-p/web` 工作区，API 客户端在 `packages/api-client`。
 - 所有页面都是 **SSG 静态页面**（`mode: "ssg"`），**没有服务端 loader**；数据一律在浏览器里通过 **Eden Treaty**（`eden.api.*`）拉取。
 - 生产构建：`bun run build`（`furin build --target static`）产出 `apps/web/dist`，再由 `apps/server` 的 Elysia 以 index.html 端点提供。
-- 开发：`bun run dev`（端口 3100）→ `/api`、`/v1` 反向代理到控制面（默认 `http://127.0.0.1:3000`，可用 `XCP_API` 覆盖，见 `apps/web/src/server.ts`）。
+- 开发：`bun run dev`（端口 3100）→ `/api`、`/v1` 反向代理到控制面（默认 `http://127.0.0.1:3000`，可用 `MHP_API` 覆盖，见 `apps/web/src/server.ts`）。
 
 ```
 apps/web/src/
@@ -46,7 +46,7 @@ import { route as appRoute } from "./_route"
 
 export const route = defineRoute()
   .config({ layout: appRoute, mode: "ssg" })
-  .head(() => ({ meta: [{ title: "页面名 · xc-p" }] }))
+  .head(() => ({ meta: [{ title: "页面名 · mh-p" }] }))
   .page(() => <PageName />)
 
 export function PageName() {
@@ -195,7 +195,7 @@ bun run web:typecheck              # 必须 0 error（会先运行 api:types 生
 bun run web:build                  # 或 cd apps/web && bun run build：页面能静态渲染
 ```
 
-开发服务器：`XCP_API=http://127.0.0.1:8080 bun run web:dev`（默认 `http://localhost:3100`，账号 `admin` / `ADMIN_PASSWORD`）。
+开发服务器：`MHP_API=http://127.0.0.1:8080 bun run web:dev`（默认 `http://localhost:3100`，账号 `admin` / `ADMIN_PASSWORD`）。
 浏览器验证脚本在 `/tmp/uitest`（playwright 1.63）：
 ```ts
 import { chromium } from "playwright"

@@ -56,7 +56,7 @@ yarn-error.log*
 package-lock.json
 **/*.bun
 
-# xc-p 运行时数据与本地 Xray 二进制（见 PANEL.md §14.1）
+# mh-p 运行时数据与本地 Xray 二进制（见 PANEL.md §14.1）
 /data/
 /apps/*/data/
 /.data-*/
