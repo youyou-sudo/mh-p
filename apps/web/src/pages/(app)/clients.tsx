@@ -24,7 +24,7 @@ import { route as appRoute } from "./_route"
 
 export const route = defineRoute()
   .config({ layout: appRoute, mode: "ssg" })
-  .head(() => ({ meta: [{ title: "客户端接入 · xc-p" }] }))
+  .head(() => ({ meta: [{ title: "客户端接入 · mh-p" }] }))
   .page(() => <ClientsPage />)
 
 interface NodeListResponse {

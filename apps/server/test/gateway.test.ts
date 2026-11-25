@@ -540,7 +540,7 @@ describe('HTTP 代理', () => {
 
     const r = await httpConnect(port(c), [])
     expect(r.text.startsWith('HTTP/1.1 407')).toBe(true)
-    expect(r.text.toLowerCase()).toContain('proxy-authenticate: basic realm="xc-p"')
+    expect(r.text.toLowerCase()).toContain('proxy-authenticate: basic realm="mh-p"')
     expect(inbound.state.hits).toBe(0)
     expect(c.failures.length).toBe(1)
   })

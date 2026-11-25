@@ -155,7 +155,7 @@ export const SOCKS5_REP_ADDR_NOT_SUPPORTED = 0x08
 
 export const HTTP_407 =
   'HTTP/1.1 407 Proxy Authentication Required\r\n' +
-  'Proxy-Authenticate: Basic realm="xc-p"\r\n' +
+  'Proxy-Authenticate: Basic realm="mh-p"\r\n' +
   'Proxy-Connection: close\r\n' +
   'Content-Length: 0\r\n' +
   'Connection: close\r\n' +
@@ -220,7 +220,7 @@ export function buildConnectRequest(target: string): Uint8Array {
   return new TextEncoder().encode(
     `CONNECT ${target} HTTP/1.1\r\n` +
       `Host: ${target}\r\n` +
-      'Proxy-Authorization: Basic eGMtcDp4Yy1w\r\n' + // xc-p:xc-p，环回入站不校验
+      'Proxy-Authorization: Basic bWgtcDptaC1w\r\n' + // mh-p:mh-p，环回入站不校验
       'Proxy-Connection: Keep-Alive\r\n' +
       '\r\n',
   )

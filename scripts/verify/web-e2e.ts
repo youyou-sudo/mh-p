@@ -7,13 +7,13 @@
  * - 移动端（390×844）可用性截图
  *
  * 运行前：先启动色板服务（bun run web:build && bun run start），然后
- *   XCP_BASE=http://127.0.0.1:8080 XCP_TEST_PASSWORD=<admin 口令> bun run verify:web
+ *   MHP_BASE=http://127.0.0.1:8080 MHP_TEST_PASSWORD=<admin 口令> bun run verify:web
  */
 import { chromium, type Browser, type Page } from "playwright"
 import { mkdir } from "node:fs/promises"
 
-const BASE = (process.env.XCP_BASE ?? "http://127.0.0.1:8080").replace(/\/$/, "")
-const PASSWORD = process.env.XCP_TEST_PASSWORD ?? ""
+const BASE = (process.env.MHP_BASE ?? "http://127.0.0.1:8080").replace(/\/$/, "")
+const PASSWORD = process.env.MHP_TEST_PASSWORD ?? ""
 const OUT = "apps/server/test/artifacts/web-e2e"
 
 const ROUTES: { path: string; title: string; must?: string[] }[] = [
@@ -102,7 +102,7 @@ async function run() {
     if (PASSWORD) {
       await login(page)
     } else {
-      console.log("  ! 未提供 XCP_TEST_PASSWORD，跳过登录（使用已保存的会话）")
+      console.log("  ! 未提供 MHP_TEST_PASSWORD，跳过登录（使用已保存的会话）")
     }
 
     for (const route of ROUTES) {

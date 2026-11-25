@@ -1,21 +1,22 @@
 import type { AppContext } from '../../context'
 import { APPLY_QUEUE } from '../../jobs/queue'
-import { buildDesiredNodes } from '../../publish/desired'
 
-/** 入队一次对账任务（apply=true）：节点删除/批量清理后清理数据面残留。 */
+/**
+ * 入队一次对账任务：Mihomo 的发布是幂等的，对账 = 再发布一次
+ * （结构没变就只补槽位 PUT，结构变了才 reload）。
+ * 节点删除/批量清理之后调用它，把数据面收敛到新的期望状态。
+ */
 export function enqueueReconcileJob(ctx: AppContext, detail: Record<string, unknown>): string {
   return ctx.jobs.enqueue(APPLY_QUEUE, 'reconcile', detail, 'panel', async () => {
-    const snap = buildDesiredNodes(ctx.db, ctx.settings, ctx.ports)
-    const applied = ctx.publisher.appliedNodes()
-    const r = await ctx.reconciler.reconcile(snap.desired, applied, { apply: true })
+    const r = await ctx.publish({ reason: 'reconcile' })
     return {
-      consistent: r.consistent,
-      drift: r.drift,
-      applied: r.applied,
-      add: r.plan.add.length,
-      remove: r.plan.remove.length,
-      cleanup: r.plan.cleanup.length,
-      change: r.plan.change.length,
+      consistent: r.ok,
+      applied: r.ok,
+      reloaded: r.reloaded,
+      assigned: r.assigned,
+      released: r.released,
+      revisionId: r.revisionId,
+      error: r.error,
     }
   })
 }

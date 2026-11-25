@@ -174,7 +174,8 @@ export function createNodesService(ctx: AppContext) {
     const closed = ctx.kick({ nodeId })
     ctx.routing.delete(nodeId)
     ctx.routing.persist()
-    ctx.ports.release(nodeId)
+    // 端口池已被槽位取代：节点占用的槽位由下一次发布（slots.assign 的 removed 分支）回收，
+    // 这里不能自己动 engine_slots —— 否则会和正在进行的发布互相踩。
     ctx.db.delete(nodesT).where(eq(nodesT.id, nodeId)).run()
     ctx.db.delete(nodeCredentials).where(eq(nodeCredentials.node_id, nodeId)).run()
     ctx.db.delete(nodeSources).where(eq(nodeSources.node_id, nodeId)).run()

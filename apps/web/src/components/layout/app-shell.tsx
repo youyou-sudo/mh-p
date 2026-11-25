@@ -15,7 +15,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Topbar />
           <div className="mx-auto w-full max-w-[1500px] flex-1 space-y-6 p-4 md:p-6">{children}</div>
           <footer className="mx-auto flex w-full max-w-[1500px] flex-wrap items-center justify-between gap-2 px-4 pb-5 text-[11px] text-muted-foreground md:px-6">
-            <span>xc-p · Xray-core 节点池管理面板</span>
+            <span>mh-p · Xray-core 节点池管理面板</span>
             <span className="font-mono">v{PANEL_VERSION}</span>
           </footer>
         </SidebarInset>

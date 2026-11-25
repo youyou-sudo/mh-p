@@ -2,7 +2,7 @@ import { Elysia } from 'elysia'
 import type { AuthService } from '../modules/auth/service'
 import { AppError } from '../core/errors'
 
-export const SESSION_COOKIE = 'xcp_session'
+export const SESSION_COOKIE = 'mhp_session'
 
 type CookieBag = Record<string, { value?: unknown } | undefined>
 

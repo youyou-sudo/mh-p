@@ -15,7 +15,7 @@ export const errorPlugin = new Elysia({ name: 'errors' }).onError({ as: 'global'
     const response = serveWebAsset(url.pathname, request)
     if (response.status === 200) {
       set.status = 200
-      // 仅收敛类型：运行时仍返回 Response（见 @xc-p/api-client 的 ApiData）
+      // 仅收敛类型：运行时仍返回 Response（见 @mh-p/api-client 的 ApiData）
       return response as unknown as ReturnType<typeof errorBody>
     }
   }

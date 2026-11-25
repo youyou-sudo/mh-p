@@ -25,7 +25,7 @@ import { route as appRoute } from "./_route"
 
 export const route = defineRoute()
   .config({ layout: appRoute, mode: "ssg" })
-  .head(() => ({ meta: [{ title: "节点 · xc-p" }] }))
+  .head(() => ({ meta: [{ title: "节点 · mh-p" }] }))
   .page(() => <NodesPage />)
 
 const STATE_OPTIONS = [

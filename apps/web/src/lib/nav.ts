@@ -68,9 +68,9 @@ export function usePathname(): string {
 
 export function routeMeta(pathname: string): RouteMeta {
   const clean = pathname.split("?")[0] ?? pathname
-  return { title: ROUTE_TITLES[clean] ?? "xc-p" }
+  return { title: ROUTE_TITLES[clean] ?? "mh-p" }
 }
 
-export const APP_NAME = "xc-p"
+export const APP_NAME = "mh-p"
 export const APP_TAGLINE = "Xray 节点池管理面板"
 export const PANEL_VERSION = "0.4.0"

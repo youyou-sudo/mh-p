@@ -44,7 +44,7 @@ import { route as appRoute } from "./_route"
 
 export const route = defineRoute()
   .config({ layout: appRoute, mode: "ssg" })
-  .head(() => ({ meta: [{ title: "事件与审计 · xc-p" }] }))
+  .head(() => ({ meta: [{ title: "事件与审计 · mh-p" }] }))
   .page(() => <EventsPage />)
 
 type TabKey = "events" | "jobs" | "audit"
@@ -141,7 +141,7 @@ export function EventsPage() {
   )
   const applyOps = useResource<{ items: ApplyOpItem[] }>(
     "audit:ops",
-    (signal) => unwrap(eden.api.audit.get({ query: { kind: "xray_apply_ops", limit: 200 }, fetch: { signal } })),
+    (signal) => unwrap(eden.api["apply-ops"].get({ query: { limit: 200 }, fetch: { signal } })),
     { pollMs: 30_000, enabled: tab === "audit" && auditTab === "ops" },
   )
 

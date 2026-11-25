@@ -14,7 +14,7 @@ type NodesService = ReturnType<typeof createNodesService>
 
 /** 节点模块（/api/nodes）。 */
 export function nodesModule(ctx: AppContext, session: SessionPlugin, service: NodesService) {
-  const { db, settings, events, jobs, auth, sync, detector } = ctx
+  const { db, settings, events, jobs, auth, sync } = ctx
   return new Elysia({ name: 'api/nodes', prefix: '/api' })
     .use(session)
     .get('/nodes', ({ query }) => {
@@ -123,7 +123,7 @@ export function nodesModule(ctx: AppContext, session: SessionPlugin, service: No
       const cred = sync.credentialOf(params.id)
       if (!cred) throw new AppError('not_found', '节点凭据不存在', 404)
       const gw = ctx.gatewayInfo()
-      const baseUrl = settings.get().panel.baseUrl || 'xc-p'
+      const baseUrl = settings.get().panel.baseUrl || 'mh-p'
       return { nodeId: params.id, ...connectionStrings(cred.username, cred.password, baseUrl, gw.port) }
     }, { requireSession: true })
     .post(
@@ -131,9 +131,14 @@ export function nodesModule(ctx: AppContext, session: SessionPlugin, service: No
       ({ params, body }) => {
         const depth = body.depth === 'lite' ? 'lite' : 'full'
         const jobId = jobs.enqueue('detect', 'detect', { nodeIds: [params.id] }, 'panel', async (_id, jctx) => {
-          const targets = detector.loadTargets([params.id], true)
-          jctx.setProgress(0, targets.length, '检测 ' + params.id)
-          const results = await detector.run(targets, { source: 'manual', depth, onProgress: (d, tot) => jctx.setProgress(d, tot) })
+          jctx.setProgress(0, 1, '检测 ' + params.id)
+          // 经槽位 listener 发真实请求：这是 Mihomo 链路里唯一能拿到 error_kind / 出口 IP 的路径。
+          // 隔离节点也要能手动测（includeQuarantined），否则被隔离的节点永远恢复不了。
+          const results = await ctx.checkNodes([params.id], depth, {
+            includeQuarantined: true,
+            source: 'manual',
+            onProgress: (d, tot) => jctx.setProgress(d, tot),
+          })
           return { results }
         })
         return { jobId }
@@ -146,11 +151,13 @@ export function nodesModule(ctx: AppContext, session: SessionPlugin, service: No
         const nodeIds: string[] | undefined = Array.isArray(body.nodeIds) && body.nodeIds.length ? body.nodeIds : undefined
         const depth = body.depth === 'lite' ? 'lite' : 'full'
         const jobId = jobs.enqueue('detect', 'detect', { nodeIds: nodeIds ?? 'all', depth }, 'panel', async (_id, jctx) => {
-          const targets = detector.loadTargets(nodeIds, true)
-          detector.semaphore.resetPeak()
-          jctx.setProgress(0, targets.length, '批量检测 ' + targets.length + ' 个节点')
-          const results = await detector.run(targets, { source: 'manual', depth, onProgress: (d, tot) => jctx.setProgress(d, tot) })
-          return { count: results.length, ok: results.filter((r) => r.ok).length, peakConcurrency: detector.peakConcurrency(), limit: detector.semaphore.capacity }
+          jctx.setProgress(0, 1, '批量检测')
+          const results = await ctx.checkNodes(nodeIds, depth, {
+            includeQuarantined: true,
+            source: 'manual',
+            onProgress: (d, tot) => jctx.setProgress(d, tot),
+          })
+          return { count: results.length, ok: results.filter((r) => r.ok).length, limit: settings.get().detect.concurrency }
         })
         return { jobId }
       },

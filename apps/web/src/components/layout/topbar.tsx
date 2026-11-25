@@ -91,18 +91,19 @@ export function Topbar() {
           <TooltipTrigger asChild>
             <Button variant="ghost" size="sm" className="hidden gap-2 md:inline-flex" onClick={() => void navigate({ to: "/runtime" })}>
               <Dot
-                tone={health ? (health.xray.status === "running" ? "ok" : "degraded") : "idle"}
-                pulse={health?.xray.status === "running"}
+                tone={health ? (health.engine.status === "running" ? "ok" : "degraded") : "idle"}
+                pulse={health?.engine.status === "running"}
               />
               <span className="text-xs text-muted-foreground">数据面</span>
               <span className="text-xs font-medium">
-                {health ? (health.xray.status === "running" ? "运行中" : health.xray.status) : "未知"}
+                {health ? (health.engine.status === "running" ? "运行中" : health.engine.status) : "未知"}
               </span>
             </Button>
           </TooltipTrigger>
           <TooltipContent>
             {health
-              ? "API " + health.xray.api + " · 延迟 " + health.xray.apiLatencyMs + "ms · tag " + health.xray.tagCount
+              ? "REST " + health.engine.rest + " · 延迟 " + health.engine.apiLatencyMs + "ms · proxy " +
+                health.engine.proxyCount + " · 槽位 " + health.engine.slotUsed + "/" + health.engine.slotCapacity
               : "正在获取健康状态…"}
           </TooltipContent>
         </Tooltip>

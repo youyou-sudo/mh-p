@@ -2,21 +2,20 @@
 
 export interface DetectSettings {
   enabled: boolean
+  /** 采样周期（秒）：provider 健康历史 → node_status 的落库节流 */
   intervalSec: number
   concurrency: number
-  tcpTimeoutMs: number
   totalTimeoutMs: number
-  jitterMs: number
   testUrl: string
   ipEchoUrls: string[]
-  probeVia: "gateway" | "direct"
   quarantineAfter: number
   recoverAfter: number
   historyKeep: number
   checkOnPublish: boolean
-  liteIntervalSec: number
+  /** 按需 full（取出口 IP）的节流间隔（秒） */
   fullIntervalSec: number
-  fullModeEnabled: boolean
+  /** Mihomo 延迟测试（GET /proxies/:name/delay?timeout=）的超时，毫秒 */
+  delayTimeoutMs: number
 }
 
 export interface DetectNode {

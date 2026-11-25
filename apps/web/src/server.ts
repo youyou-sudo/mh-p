@@ -2,10 +2,10 @@ import { Elysia } from "elysia"
 import { furin } from "@teyik0/furin"
 
 /**
- * 开发用 Furin 服务器：页面走 Furin 的 HMR，/api 与 /v1 反向代理到 xc-p 控制面，
+ * 开发用 Furin 服务器：页面走 Furin 的 HMR，/api 与 /v1 反向代理到 mh-p 控制面，
  * 这样浏览器始终同源，Cookie 会话与 SSE 都能原样工作。
  */
-const API_TARGET = (process.env.XCP_API ?? "http://127.0.0.1:3000").replace(/\/$/, "")
+const API_TARGET = (process.env.MHP_API ?? "http://127.0.0.1:3000").replace(/\/$/, "")
 const port = Number(process.env.PORT ?? 3100)
 
 const DROP_HEADERS = new Set([

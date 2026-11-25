@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldContent, FieldDescription, FieldLabel, FieldTitle } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
@@ -29,17 +28,13 @@ interface DetectPolicyFormProps {
 interface DetectForm {
   enabled: boolean
   intervalSec: string
-  liteIntervalSec: string
   fullIntervalSec: string
-  fullModeEnabled: boolean
+  delayTimeoutMs: string
   checkOnPublish: boolean
   concurrency: string
-  jitterMs: string
-  tcpTimeoutMs: string
   totalTimeoutMs: string
   testUrl: string
   ipEchoUrls: string
-  probeVia: "gateway" | "direct"
   quarantineAfter: string
   recoverAfter: string
   historyKeep: string
@@ -49,17 +44,13 @@ function toForm(settings: DetectSettings): DetectForm {
   return {
     enabled: !!settings.enabled,
     intervalSec: String(settings.intervalSec ?? ""),
-    liteIntervalSec: String(settings.liteIntervalSec ?? ""),
     fullIntervalSec: String(settings.fullIntervalSec ?? ""),
-    fullModeEnabled: !!settings.fullModeEnabled,
+    delayTimeoutMs: String(settings.delayTimeoutMs ?? ""),
     checkOnPublish: !!settings.checkOnPublish,
     concurrency: String(settings.concurrency ?? ""),
-    jitterMs: String(settings.jitterMs ?? ""),
-    tcpTimeoutMs: String(settings.tcpTimeoutMs ?? ""),
     totalTimeoutMs: String(settings.totalTimeoutMs ?? ""),
     testUrl: settings.testUrl ?? "",
     ipEchoUrls: Array.isArray(settings.ipEchoUrls) ? settings.ipEchoUrls.join("\n") : "",
-    probeVia: settings.probeVia === "direct" ? "direct" : "gateway",
     quarantineAfter: String(settings.quarantineAfter ?? ""),
     recoverAfter: String(settings.recoverAfter ?? ""),
     historyKeep: String(settings.historyKeep ?? ""),
@@ -70,20 +61,16 @@ function toSettings(form: DetectForm): DetectSettings {
   return {
     enabled: form.enabled,
     intervalSec: Number(form.intervalSec),
-    liteIntervalSec: Number(form.liteIntervalSec),
     fullIntervalSec: Number(form.fullIntervalSec),
-    fullModeEnabled: form.fullModeEnabled,
+    delayTimeoutMs: Number(form.delayTimeoutMs),
     checkOnPublish: form.checkOnPublish,
     concurrency: Number(form.concurrency),
-    jitterMs: Number(form.jitterMs),
-    tcpTimeoutMs: Number(form.tcpTimeoutMs),
     totalTimeoutMs: Number(form.totalTimeoutMs),
     testUrl: form.testUrl.trim(),
     ipEchoUrls: form.ipEchoUrls
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean),
-    probeVia: form.probeVia,
     quarantineAfter: Number(form.quarantineAfter),
     recoverAfter: Number(form.recoverAfter),
     historyKeep: Number(form.historyKeep),
@@ -98,17 +85,14 @@ function validate(form: DetectForm): string[] {
     if (!Number.isFinite(parsed) || parsed < min || parsed > max) errors.push(label + "需在 " + min + "–" + max + " 之间")
     return parsed
   }
-  range(form.intervalSec, "检测间隔（秒）", 30, 2592000)
-  range(form.liteIntervalSec, "轻量检测间隔（秒）", 60, 2592000)
-  range(form.fullIntervalSec, "全量检测间隔（秒）", 60, 2592000)
+  range(form.intervalSec, "采样间隔（秒）", 30, 2592000)
+  range(form.fullIntervalSec, "出口确认间隔（秒）", 60, 2592000)
   range(form.concurrency, "全局并发上限", 1, 64)
-  const tcp = range(form.tcpTimeoutMs, "S1 网关握手超时（毫秒）", 200, 60000)
-  const total = range(form.totalTimeoutMs, "单节点总超时（毫秒）", 500, 300000)
-  range(form.jitterMs, "抖动（毫秒）", 0, 600000)
+  range(form.totalTimeoutMs, "单节点总超时（毫秒）", 500, 300000)
+  range(form.delayTimeoutMs, "延迟测试超时（毫秒）", 100, 120000)
   range(form.quarantineAfter, "隔离阈值", 1, 100)
   range(form.recoverAfter, "恢复阈值", 1, 100)
   range(form.historyKeep, "历史保留条数", 5, 10000)
-  if (Number.isFinite(tcp) && Number.isFinite(total) && total < tcp) errors.push("单节点总超时必须 ≥ S1 网关握手超时")
   if (!isHttpUrl(form.testUrl)) errors.push("S2 探测地址必须是 http(s) URL")
   const urls = form.ipEchoUrls
     .split(/\r?\n/)
@@ -230,25 +214,17 @@ export function DetectPolicyForm({ settings, onSaved }: DetectPolicyFormProps) {
             </FieldContent>
             <Switch checked={form.enabled} onCheckedChange={(checked) => update("enabled", checked)} aria-label="启用定时检测" />
           </Field>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <NumberField id="detect-interval" label="检测间隔（秒）" min={30} value={form.intervalSec} onChange={(value) => update("intervalSec", value)} hint="默认 900（15 分钟）" />
-            <NumberField id="detect-lite-interval" label="轻量检测间隔（秒）" min={60} value={form.liteIntervalSec} onChange={(value) => update("liteIntervalSec", value)} hint="默认 3600" />
-            <NumberField id="detect-full-interval" label="全量检测间隔（秒）" min={60} value={form.fullIntervalSec} onChange={(value) => update("fullIntervalSec", value)} hint="默认 21600" />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <NumberField id="detect-interval" label="采样间隔（秒）" min={30} value={form.intervalSec} onChange={(value) => update("intervalSec", value)} hint="默认 900；健康数据来自 Mihomo provider 的 history，只做落库节流" />
+            <NumberField id="detect-full-interval" label="出口确认间隔（秒）" min={60} value={form.fullIntervalSec} onChange={(value) => update("fullIntervalSec", value)} hint="默认 21600；每个节点至少这么久才经槽位 listener 做一次真实请求（拿出口 IP）" />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field orientation="horizontal" className="rounded-lg border p-3">
               <FieldContent>
-                <FieldTitle>启用全量检测</FieldTitle>
-                <FieldDescription>关闭后定时任务只跑 lite（S1 + S2）。</FieldDescription>
+                <FieldTitle>发布后立即确认</FieldTitle>
+                <FieldDescription>开启后，节点发布到槽位后的第一个采样周期就做一次出口确认。</FieldDescription>
               </FieldContent>
-              <Switch checked={form.fullModeEnabled} onCheckedChange={(checked) => update("fullModeEnabled", checked)} aria-label="启用全量检测" />
-            </Field>
-            <Field orientation="horizontal" className="rounded-lg border p-3">
-              <FieldContent>
-                <FieldTitle>发布前门禁检测</FieldTitle>
-                <FieldDescription>发布前对涉及且已过期的节点做一次快速 lite 检测。</FieldDescription>
-              </FieldContent>
-              <Switch checked={form.checkOnPublish} onCheckedChange={(checked) => update("checkOnPublish", checked)} aria-label="发布前门禁检测" />
+              <Switch checked={form.checkOnPublish} onCheckedChange={(checked) => update("checkOnPublish", checked)} aria-label="发布后立即确认" />
             </Field>
           </div>
         </div>
@@ -268,31 +244,22 @@ export function DetectPolicyForm({ settings, onSaved }: DetectPolicyFormProps) {
               hint="默认 8；必须显著低于网关并发上限，避免挤占用户带宽"
             />
             <NumberField
-              id="detect-jitter"
-              label="抖动（毫秒）"
-              min={0}
-              max={600000}
-              value={form.jitterMs}
-              onChange={(value) => update("jitterMs", value)}
-              hint="默认 800，避免整点雪崩"
-            />
-            <NumberField
-              id="detect-tcp-timeout"
-              label="S1 网关握手超时（毫秒）"
-              min={200}
-              max={60000}
-              value={form.tcpTimeoutMs}
-              onChange={(value) => update("tcpTimeoutMs", value)}
-              hint="默认 4000"
-            />
-            <NumberField
               id="detect-total-timeout"
               label="单节点总超时（毫秒）"
               min={500}
               max={300000}
               value={form.totalTimeoutMs}
               onChange={(value) => update("totalTimeoutMs", value)}
-              hint="默认 12000，必须 ≥ S1 超时"
+              hint="默认 12000（经槽位 listener 的一次真实请求）"
+            />
+            <NumberField
+              id="detect-delay-timeout"
+              label="延迟测试超时（毫秒）"
+              min={100}
+              max={120000}
+              value={form.delayTimeoutMs}
+              onChange={(value) => update("delayTimeoutMs", value)}
+              hint="Mihomo 延迟测试超时，默认 5000"
             />
           </div>
         </div>
@@ -311,9 +278,9 @@ export function DetectPolicyForm({ settings, onSaved }: DetectPolicyFormProps) {
             />
             <FieldDescription>期望返回 200/204；检测流量会经探测路径发出。</FieldDescription>
           </Field>
-          <div className="grid gap-3 sm:grid-cols-[1fr_220px]">
+          <div className="grid gap-3">
             <Field>
-              <FieldLabel htmlFor="detect-ip-echo">S3 IP 查询源（每行一个）</FieldLabel>
+              <FieldLabel htmlFor="detect-ip-echo">IP 查询源（每行一个）</FieldLabel>
               <Textarea
                 id="detect-ip-echo"
                 rows={4}
@@ -323,19 +290,6 @@ export function DetectPolicyForm({ settings, onSaved }: DetectPolicyFormProps) {
                 onChange={(event) => update("ipEchoUrls", event.target.value)}
               />
               <FieldDescription>至少一个，用于确认节点真实出口 IP 与地区。</FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel>探测路径</FieldLabel>
-              <Select value={form.probeVia} onValueChange={(value) => update("probeVia", value === "direct" ? "direct" : "gateway")}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="gateway">经网关（端到端，推荐）</SelectItem>
-                  <SelectItem value="direct">仅经数据面直连</SelectItem>
-                </SelectContent>
-              </Select>
-              <FieldDescription>经网关能验证完整链路与认证；直连只验证节点本身。</FieldDescription>
             </Field>
           </div>
         </div>

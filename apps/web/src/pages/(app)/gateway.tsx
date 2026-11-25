@@ -35,7 +35,7 @@ import { route as appRoute } from "./_route"
 
 export const route = defineRoute()
   .config({ layout: appRoute, mode: "ssg" })
-  .head(() => ({ meta: [{ title: "网关 · xc-p" }] }))
+  .head(() => ({ meta: [{ title: "网关 · mh-p" }] }))
   .page(() => <GatewayPage />)
 
 export function GatewayPage() {

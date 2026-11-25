@@ -11,7 +11,7 @@ import {
 
 /** 系统设置表单：分组与字段定义（字段与默认值对齐 src/core/settings.ts）。 */
 
-export type SettingsGroupKey = "panel" | "gateway" | "xray" | "direct" | "subsync" | "detect" | "metrics"
+export type SettingsGroupKey = "panel" | "gateway" | "engine" | "direct" | "subsync" | "detect" | "metrics"
 
 export type FieldType = "text" | "number" | "enum" | "boolean" | "lines" | "textarea"
 
@@ -63,7 +63,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         label: "面板外部地址（baseUrl）",
         type: "text",
         placeholder: "proxy.example.com",
-        hint: "客户端连接串里的主机名；留空则用 xc-p。只填主机名，不要带协议或端口。",
+        hint: "客户端连接串里的主机名；留空则用 mh-p。只填主机名，不要带协议或端口。",
         pattern: { re: /^[A-Za-z0-9.-]*$/, message: "只填主机名（不含协议与端口），例如 proxy.example.com" },
         wide: true,
       },
@@ -131,9 +131,10 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
     ],
   },
   {
-    key: "xray",
-    title: "Xray 数据面",
-    description: "二进制、管理口、环回端口池、热操作阈值与维护窗口。",
+    // 过渡期：engine 是 Mihomo 新链路，xray 组暂时保留（旧引擎代码仍读 xray.*），cutover 时统一删除。
+    key: "engine",
+    title: "Mihomo 数据面（新）",
+    description: "Mihomo 二进制、external-controller、槽位容量与环回端口区间。过渡期与下方 Xray 组并存。",
     icon: Server,
     fields: [
       {
@@ -142,70 +143,38 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         type: "enum",
         options: [
           { value: "managed", label: "managed（面板托管进程）" },
-          { value: "external", label: "external（外部 Xray）" },
+          { value: "external", label: "external（外部 Mihomo）" },
         ],
       },
       {
         path: "binary",
-        label: "Xray 二进制路径",
+        label: "Mihomo 二进制路径",
         type: "text",
         required: true,
-        placeholder: "xray",
-        hint: "打包版已内嵌对应平台的 Xray（版本随构建固定，启动时解出到 DATA_DIR/bin 并校验 SHA256），默认即可；填绝对路径可覆盖（开发/外置模式）。",
-      },
-      {
-        path: "binarySha256",
-        label: "二进制 SHA256",
-        type: "text",
-        placeholder: "留空表示不校验",
-        hint: "64 位十六进制；非空时升级会校验哈希。",
-        pattern: { re: /^([0-9a-fA-F]{64})?$/, message: "留空或填 64 位十六进制" },
-        wide: true,
+        placeholder: "mihomo",
+        hint: "默认 mihomo（PATH 或打包内嵌）。旧库迁移时会强制改成这个值，避免继续找 xray。",
       },
       {
         path: "apiAddress",
-        label: "API 管理口",
+        label: "external-controller 管理口",
         type: "text",
         required: true,
-        placeholder: "127.0.0.1:8501",
+        placeholder: "127.0.0.1:9090",
         pattern: { re: HOST_PORT, message: "格式应为 host:port" },
-        hint: "必须只绑环回地址（127.0.0.1），公网可达等于把数据面控制权交出去。",
+        hint: "必须只绑环回地址；公网可达等于把数据面控制权交出去。",
       },
       {
-        path: "apiChannel",
-        label: "API 通道",
-        type: "enum",
-        options: [
-          { value: "cli", label: "cli（Bun.spawn xray api）" },
-          { value: "grpc", label: "grpc" },
-        ],
-      },
-      { path: "apiTimeoutSec", label: "API 超时（秒）", type: "number", min: 1, max: 300, hint: "默认 10。" },
-      {
-        path: "metricsListen",
-        label: "metrics 监听",
+        path: "secret",
+        label: "REST secret",
         type: "text",
-        required: true,
-        placeholder: "127.0.0.1:8502",
-        pattern: { re: HOST_PORT, message: "格式应为 host:port" },
-        hint: "同样只绑环回；面板经由 /api/metrics 转发。",
+        wide: true,
+        placeholder: "留空由服务端生成",
+        hint: "Authorization: Bearer <secret>。留空时首启动生成随机串并落库，不要用固定值。",
       },
-      { path: "inboundPortStart", label: "环回端口池起始", type: "number", min: 1024, max: 65535, hint: "默认 24000，需避开系统 ip_local_port_range。" },
-      { path: "inboundPortEnd", label: "环回端口池结束", type: "number", min: 1024, max: 65535, hint: "默认 28999；必须大于起始值。" },
-      { path: "portCooldownSec", label: "端口冷却（秒）", type: "number", min: 0, max: 86400, hint: "默认 300，规避 TIME_WAIT。" },
-      { path: "retireDelayMs", label: "旧 tag 延迟删除（毫秒）", type: "number", min: 0, max: 3600000, hint: "默认 120000；0 表示立即删除。" },
-      { path: "hotOpsRestartThreshold", label: "热操作重启阈值", type: "number", min: 0, max: 1000000, hint: "默认 500（ado + rmo 累计），超过后发布改走重启。" },
-      {
-        path: "maintenanceWindow",
-        label: "维护窗口（HH:MM）",
-        type: "text",
-        placeholder: "04:00",
-        pattern: { re: /^([01]\d|2[0-3]):[0-5]\d$|^$/, message: "格式 HH:MM，例如 04:00；留空表示不限制" },
-        hint: "仅展示与运维约定用；留空表示不限制。",
-      },
+      { path: "apiTimeoutMs", label: "REST 超时（毫秒）", type: "number", min: 1000, max: 300000, hint: "默认 10000。" },
       {
         path: "logLevel",
-        label: "Xray 日志级别",
+        label: "Mihomo 日志级别",
         type: "enum",
         options: [
           { value: "debug", label: "debug" },
@@ -215,7 +184,25 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
           { value: "none", label: "none" },
         ],
       },
-      { path: "replayOnStart", label: "启动时重放期望状态", type: "boolean", hint: "控制面重启后做一次全量对账/重放。" },
+      {
+        path: "slotCapacity",
+        label: "槽位容量",
+        type: "number",
+        min: 1,
+        max: 2000,
+        hint: "= listener 数 = 可上线节点上限；新增/删除槽位需要重载配置。默认 256。",
+      },
+      { path: "inboundPortStart", label: "槽位端口起始", type: "number", min: 1024, max: 65535, hint: "默认 24000；端口 = 起始 + 槽位号。" },
+      { path: "inboundPortEnd", label: "槽位端口结束", type: "number", min: 1024, max: 65535, hint: "默认 28999；必须容得下 slotCapacity 个槽位。" },
+      { path: "portCooldownSec", label: "端口冷却（秒）", type: "number", min: 0, max: 86400, hint: "默认 300，规避 TIME_WAIT。" },
+      {
+        path: "maintenanceWindow",
+        label: "维护窗口（HH:MM）",
+        type: "text",
+        placeholder: "04:00",
+        pattern: { re: /^([01]\d|2[0-3]):[0-5]\d$|^$/, message: "格式 HH:MM，例如 04:00；留空表示不限制" },
+        hint: "仅展示与运维约定用；留空表示不限制。",
+      },
     ],
   },
   {
@@ -280,9 +267,7 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
       { path: "enabled", label: "启用定时检测", type: "boolean", hint: "关闭后只能手动触发检测。" },
       { path: "intervalSec", label: "检测间隔（秒）", type: "number", min: 30, max: 2592000, hint: "默认 900。" },
       { path: "concurrency", label: "检测并发", type: "number", min: 1, max: 64, hint: "必须显著低于网关并发上限；默认 8。" },
-      { path: "tcpTimeoutMs", label: "S1 握手超时（毫秒）", type: "number", min: 200, max: 60000, hint: "默认 4000。" },
-      { path: "totalTimeoutMs", label: "单节点总超时（毫秒）", type: "number", min: 500, max: 300000, hint: "默认 12000；必须 ≥ S1 握手超时。" },
-      { path: "jitterMs", label: "抖动（毫秒）", type: "number", min: 0, max: 600000, hint: "默认 800，避免所有节点同时检测。" },
+      { path: "totalTimeoutMs", label: "单节点总超时（毫秒）", type: "number", min: 500, max: 300000, hint: "默认 12000（经槽位 listener 的一次真实请求）。" },
       {
         path: "testUrl",
         label: "S2 探测地址",
@@ -302,23 +287,12 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
         itemPattern: { re: new RegExp("^https?://"), message: "每一行都必须是 http(s) URL" },
         hint: "每行一个 URL；按顺序尝试，用于确认出口 IP 与地区。",
       },
-      {
-        path: "probeVia",
-        label: "探测路径",
-        type: "enum",
-        options: [
-          { value: "gateway", label: "经网关（端到端）" },
-          { value: "direct", label: "仅数据面直连" },
-        ],
-        hint: "经网关更接近真实客户端链路，但会占用网关并发。",
-      },
       { path: "quarantineAfter", label: "隔离阈值（连续失败）", type: "number", min: 1, max: 100, hint: "默认 3。" },
       { path: "recoverAfter", label: "恢复阈值（连续成功）", type: "number", min: 1, max: 100, hint: "默认 2。" },
       { path: "historyKeep", label: "每节点历史保留条数", type: "number", min: 5, max: 10000, hint: "默认 50。" },
-      { path: "checkOnPublish", label: "发布前门禁检测", type: "boolean", hint: "发布前强制检测一次，默认开启。" },
-      { path: "liteIntervalSec", label: "轻量检测间隔（秒）", type: "number", min: 60, max: 2592000, hint: "默认 3600。" },
-      { path: "fullIntervalSec", label: "完整检测间隔（秒）", type: "number", min: 60, max: 2592000, hint: "默认 21600。" },
-      { path: "fullModeEnabled", label: "启用完整检测", type: "boolean", hint: "关闭后只跑轻量检测（耗时更短，但拿不到出口 IP）。" },
+      { path: "checkOnPublish", label: "发布后立即确认", type: "boolean", hint: "发布到槽位后的第一个采样周期就做一次出口确认。" },
+      { path: "delayTimeoutMs", label: "延迟测试超时（毫秒）", type: "number", min: 100, max: 120000, hint: "Mihomo GET /proxies/:name/delay 的超时，默认 5000。" },
+      { path: "fullIntervalSec", label: "出口确认间隔（秒）", type: "number", min: 60, max: 2592000, hint: "默认 21600；每个节点至少这么久才做一次 full。" },
     ],
   },
   {
@@ -489,15 +463,16 @@ function crossValidate(group: SettingsGroup, form: FormState): Record<string, st
     }
   }
 
-  if (group.key === "xray") {
-    const start = numberValue(form, "xray", "inboundPortStart")
-    const end = numberValue(form, "xray", "inboundPortEnd")
+  if (group.key === "engine") {
+    const start = numberValue(form, "engine", "inboundPortStart")
+    const end = numberValue(form, "engine", "inboundPortEnd")
+    const capacity = numberValue(form, "engine", "slotCapacity")
     if (Number.isFinite(start) && Number.isFinite(end) && end <= start) {
-      setError("inboundPortEnd", "端口池结束必须大于起始（服务端同样会拒绝）")
+      setError("inboundPortEnd", "端口区间结束必须大于起始（服务端同样会拒绝）")
     }
-    const api = String(form[formKey("xray", "apiAddress")] ?? "").trim()
-    const metrics = String(form[formKey("xray", "metricsListen")] ?? "").trim()
-    if (api && api === metrics) setError("metricsListen", "API 管理口与 metrics 监听不能相同")
+    if (Number.isFinite(start) && Number.isFinite(end) && Number.isFinite(capacity) && start + capacity - 1 > end) {
+      setError("slotCapacity", "端口区间容不下这些槽位（需要 end - start + 1 ≥ slotCapacity）")
+    }
   }
 
   if (group.key === "direct") {
@@ -510,14 +485,6 @@ function crossValidate(group: SettingsGroup, form: FormState): Record<string, st
     const http = String(form[formKey("direct", "listen")] ?? "").trim()
     const socks = String(form[formKey("direct", "socksListen")] ?? "").trim()
     if (http && http === socks) setError("socksListen", "HTTP 与 SOCKS 监听不能是同一个地址")
-  }
-
-  if (group.key === "detect") {
-    const tcp = numberValue(form, "detect", "tcpTimeoutMs")
-    const total = numberValue(form, "detect", "totalTimeoutMs")
-    if (Number.isFinite(tcp) && Number.isFinite(total) && total < tcp) {
-      setError("totalTimeoutMs", "单节点总超时必须 ≥ S1 握手超时")
-    }
   }
 
   return errors

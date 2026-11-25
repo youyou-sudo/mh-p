@@ -1,6 +1,6 @@
 import { Elysia } from 'elysia'
 import { and, desc, eq, like } from 'drizzle-orm'
-import { auditLog, events as eventsTable, xrayApplyOps } from '../../core/schema'
+import { auditLog, engineOps, events as eventsTable } from '../../core/schema'
 import type { AppContext } from '../../context'
 import { parsePaging, requestId } from '../../core/http'
 import { sessionOf, type createSessionPlugin } from '../../plugins/session'
@@ -10,11 +10,12 @@ type SessionPlugin = ReturnType<typeof createSessionPlugin>
 /** 事件 / 审计 / 应用操作模块（/api/events、/api/audit、/api/apply-ops、/api/stream）。 */
 export function eventsModule(ctx: AppContext, session: SessionPlugin) {
   const { db, events, conns, auth } = ctx
+  // 审计数据源：Mihomo 时代的 engine_ops（reload / assign / test_config …）；xray_apply_ops 只留历史
   const listApplyOps = (limit: number, offset: number) => ({
     items: db
       .select()
-      .from(xrayApplyOps)
-      .orderBy(desc(xrayApplyOps.at))
+      .from(engineOps)
+      .orderBy(desc(engineOps.at))
       .limit(limit)
       .offset(offset)
       .all(),
@@ -42,7 +43,9 @@ export function eventsModule(ctx: AppContext, session: SessionPlugin) {
     .get('/audit', ({ query }) => {
       const q = query
       const p = parsePaging(q)
-      if (q.kind === 'xray_apply_ops') return listApplyOps(p.limit, p.offset)
+      // 注意：审计日志与引擎操作是两种形状，不能在这个端点里二选一返回——
+      // 那会让 Eden 推导出联合类型，前端每一处调用都要跟着做窄化。
+      // 引擎操作走 /api/apply-ops（下方），这里只返回 audit_log。
       const items = db
         .select()
         .from(auditLog)

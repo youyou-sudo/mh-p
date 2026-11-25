@@ -5,20 +5,22 @@ export interface HealthReport {
   panel: string
   sqlite: "ok" | "error"
   schemaVersion: number
-  xray: {
+  engine: {
     mode: string
-    pid: number | null
     status: string
-    version: string
-    api: string
+    pid: number | null
+    version: string | null
+    /** REST /version 是否可达 */
+    rest: "ok" | "unreachable"
     apiLatencyMs: number
-    tagCount: number
-    ruleCount: number
-    rulesSupported: boolean
-    hotOpsTotal: number
-    pendingRetire: number
-    runtimeSec: number
+    slotUsed: number
+    slotCapacity: number
+    providerCount: number
+    proxyCount: number
+    uptimeSec: number
     restarts: number
+    lastPublishAt: number | null
+    reloadNeeded: boolean
   }
   gateway: { listen: string; enabled: boolean; activeConns: number; authFailures5m: number; banned: number }
   ports: { pool: number; used: number; cooling: number; bindable: { port: number; ok: boolean }[] }

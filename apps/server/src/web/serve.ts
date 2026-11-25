@@ -27,7 +27,7 @@ const MIME: Record<string, string> = {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>404 · xc-p</title>
+<title>404 · mh-p</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -149,7 +149,7 @@ export function serveWebAsset(pathname: string, request: Request): Response {
 
 const BUILD_REQUIRED_HTML = `<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>面板尚未构建 · xc-p</title>
+<title>面板尚未构建 · mh-p</title>
 <style>
   body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#fbfbfd;color:#1c1c22;
     font-family:"Inter","PingFang SC","Microsoft YaHei",ui-sans-serif,system-ui,sans-serif}

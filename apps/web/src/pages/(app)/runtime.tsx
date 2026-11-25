@@ -49,7 +49,7 @@ import { route as appRoute } from "./_route"
 
 export const route = defineRoute()
   .config({ layout: appRoute, mode: "ssg" })
-  .head(() => ({ meta: [{ title: "运行配置 · xc-p" }] }))
+  .head(() => ({ meta: [{ title: "运行配置 · mh-p" }] }))
   .page(() => <RuntimePage />)
 
 interface RuntimeDataplane {
@@ -78,6 +78,19 @@ interface RuntimeRevisionInfo {
 }
 
 interface RuntimeStatus {
+  // Mihomo 时代：引擎态与槽位是面板真正该用的字段（下面 revision/dataplane/… 是过渡期兼容字段）
+  engine: {
+    mode: string
+    status: string
+    pid: number | null
+    version: string | null
+    startedAt: number | null
+    restarts: number
+    uptimeSec: number
+  }
+  slots: { capacity: number; used: number; free: number; portStart: number; portEnd: number }
+  reloadNeeded: boolean
+  lastPublish: { revisionId: string | null; lastPublishAt: number | null }
   // 后端 currentStatus().revision 是对象（含 id/status/reason/createdAt/digest），不是字符串。
   revision: RuntimeRevisionInfo | null
   dataplane: RuntimeDataplane

@@ -80,7 +80,7 @@ export function AppSidebar() {
               <span className="flex items-center gap-1.5 font-medium">
                 <Dot
                   tone={health ? (health.overall === "ok" ? "ok" : "degraded") : "idle"}
-                  pulse={health?.xray.status === "running"}
+                  pulse={health?.engine.status === "running"}
                 />
                 {health ? (health.overall === "ok" ? "正常" : "降级") : "未知"}
               </span>

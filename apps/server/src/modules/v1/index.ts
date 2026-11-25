@@ -7,7 +7,6 @@ import { decryptSecret } from '../../core/crypto'
 import { AppError } from '../../core/errors'
 import { parsePaging } from '../../core/http'
 import { APPLY_QUEUE } from '../../jobs/queue'
-import { buildDesiredNodes } from '../../publish/desired'
 import { connectionStrings, listNodes } from '../nodes/service'
 import type { SubscriptionsService } from '../subscriptions/service'
 import { v1DetectBody, v1SyncBody } from './model'
@@ -15,7 +14,7 @@ import { createV1Auth, forbiddenResponse } from './service'
 
 /** 服务 API（/v1，API Key + scope，无 Cookie 会话）。 */
 export function v1Module(ctx: AppContext, subscriptions: SubscriptionsService) {
-  const { db, settings, jobs, sync, auth, detector, publisher, reconciler, ports } = ctx
+  const { db, settings, jobs, sync, auth } = ctx
   const v1Auth = createV1Auth(ctx)
   return new Elysia({ name: 'api/v1', prefix: '/v1' })
     .get('/health', ({ request }) => {
@@ -35,7 +34,7 @@ export function v1Module(ctx: AppContext, subscriptions: SubscriptionsService) {
           .where(and(eq(nodesT.enabled, 1), eq(nodesT.protocol_supported, 1)))
           .get()?.n ?? 0
       return {
-        host: settings.get().panel.baseUrl || 'xc-p',
+        host: settings.get().panel.baseUrl || 'mh-p',
         port: gw.port,
         listen: settings.get().gateway.listen,
         authMode: settings.get().gateway.authMode,
@@ -59,7 +58,7 @@ export function v1Module(ctx: AppContext, subscriptions: SubscriptionsService) {
       const cred = sync.credentialOf(params.id)
       if (!cred) throw new AppError('not_found', '节点不存在或没有凭据', 404)
       const gw = ctx.gatewayInfo()
-      const host = settings.get().panel.baseUrl || 'xc-p'
+      const host = settings.get().panel.baseUrl || 'mh-p'
       return { nodeId: params.id, username: cred.username, password: cred.password, ...connectionStrings(cred.username, cred.password, host, gw.port) }
     })
     .get('/endpoints', ({ request, query }) => {
@@ -68,7 +67,7 @@ export function v1Module(ctx: AppContext, subscriptions: SubscriptionsService) {
       if (!hasScope(a.principal!, 'read') || !hasScope(a.principal!, 'credentials')) return forbiddenResponse('read+credentials')
       const q = query as Record<string, string | undefined>
       const gw = ctx.gatewayInfo()
-      const host = settings.get().panel.baseUrl || 'xc-p'
+      const host = settings.get().panel.baseUrl || 'mh-p'
       let rows = db.all<any>(
         'SELECT n.id, n.display_name, n.country_code, c.username, c.password_enc FROM nodes n JOIN node_credentials c ON c.node_id = n.id WHERE n.enabled = 1 ORDER BY n.id',
       )
@@ -124,9 +123,11 @@ export function v1Module(ctx: AppContext, subscriptions: SubscriptionsService) {
         if (!hasScope(a.principal!, 'detect:run')) return forbiddenResponse('detect:run')
         const nodeIds = Array.isArray(body.nodeIds) ? body.nodeIds : undefined
         const jobId = jobs.enqueue('detect', 'detect', { nodeIds: nodeIds ?? 'all' }, 'apikey:' + a.principal!.name, async (_id, jctx) => {
-          const targets = detector.loadTargets(nodeIds, true)
-          jctx.setProgress(0, targets.length)
-          const results = await detector.run(targets, { source: 'apikey', depth: body.depth === 'lite' ? 'lite' : 'full', onProgress: (d, t) => jctx.setProgress(d, t) })
+          const results = await ctx.checkNodes(nodeIds, body.depth === 'lite' ? 'lite' : 'full', {
+            includeQuarantined: true,
+            source: 'apikey',
+            onProgress: (d, t) => jctx.setProgress(d, t),
+          })
           return { count: results.length, ok: results.filter((r) => r.ok).length }
         })
         auth.audit('apikey', a.principal!.name, 'v1.detect', null, null, { nodeIds: nodeIds ?? 'all' })
@@ -139,9 +140,22 @@ export function v1Module(ctx: AppContext, subscriptions: SubscriptionsService) {
       if (a.error) return a.error
       if (!hasScope(a.principal!, 'publish:run')) return forbiddenResponse('publish:run')
       const jobId = jobs.enqueue(APPLY_QUEUE, 'publish', {}, 'apikey:' + a.principal!.name, async () => {
-        const r = await publisher.publish({ reason: 'api' })
-        auth.audit('apikey', a.principal!.name, 'v1.publish', r.revisionId, null, r.summary)
-        return { ok: r.ok, revisionId: r.revisionId, summary: r.summary, error: r.error }
+        const r = await ctx.publish({ reason: 'api' })
+        auth.audit('apikey', a.principal!.name, 'v1.publish', r.revisionId, null, {
+          reloaded: r.reloaded,
+          assigned: r.assigned,
+          released: r.released,
+        })
+        return {
+          ok: r.ok,
+          revisionId: r.revisionId,
+          reloaded: r.reloaded,
+          assigned: r.assigned,
+          released: r.released,
+          overflow: r.overflow,
+          checks: r.checks,
+          error: r.error,
+        }
       })
       return { jobId }
     })
@@ -150,9 +164,16 @@ export function v1Module(ctx: AppContext, subscriptions: SubscriptionsService) {
       if (a.error) return a.error
       if (!hasScope(a.principal!, 'publish:run')) return forbiddenResponse('publish:run')
       const jobId = jobs.enqueue(APPLY_QUEUE, 'reconcile', {}, 'apikey:' + a.principal!.name, async () => {
-        const snap = buildDesiredNodes(db, settings, ports)
-        const r = await reconciler.reconcile(snap.desired, publisher.appliedNodes(), { apply: true })
-        return { consistent: r.consistent, drift: r.drift }
+        // 对账 = 发布幂等重跑：结构没变就只补槽位 PUT
+        const r = await ctx.publish({ reason: 'reconcile' })
+        return {
+          consistent: r.ok,
+          reloaded: r.reloaded,
+          assigned: r.assigned,
+          released: r.released,
+          revisionId: r.revisionId,
+          error: r.error,
+        }
       })
       return { jobId }
     })

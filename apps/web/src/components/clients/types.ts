@@ -51,10 +51,10 @@ export function nodeState(node: ClientNode): string {
   return node.status?.state ?? "unknown"
 }
 
-/** 连接串里的主机名由 panel.baseUrl 决定（留空时服务端用 xc-p）。 */
+/** 连接串里的主机名由 panel.baseUrl 决定（留空时服务端用 mh-p）。 */
 export function clientHost(settings: ClientSettings | undefined): string {
   const base = settings?.panel?.baseUrl?.trim()
-  return base ? base : "xc-p"
+  return base ? base : "mh-p"
 }
 
 /** listen 形如 0.0.0.0:7890 / [::]:7890，取端口。 */

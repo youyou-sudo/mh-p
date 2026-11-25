@@ -22,7 +22,7 @@ import { route as appRoute } from "./_route"
 
 export const route = defineRoute()
   .config({ layout: appRoute, mode: "ssg" })
-  .head(() => ({ meta: [{ title: "API Key · xc-p" }] }))
+  .head(() => ({ meta: [{ title: "API Key · mh-p" }] }))
   .page(() => <CredentialsPage />)
 
 const STATUS_ALL = "__all__"

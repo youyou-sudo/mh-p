@@ -33,7 +33,7 @@ import { route as appRoute } from "./_route"
 
 export const route = defineRoute()
   .config({ layout: appRoute, mode: "ssg" })
-  .head(() => ({ meta: [{ title: "检测 · xc-p" }] }))
+  .head(() => ({ meta: [{ title: "检测 · mh-p" }] }))
   .page(() => <DetectPage />)
 
 type Depth = "full" | "lite"

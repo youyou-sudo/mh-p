@@ -38,7 +38,7 @@ import { route as appRoute } from "./_route"
 
 export const route = defineRoute()
   .config({ layout: appRoute, mode: "ssg" })
-  .head(() => ({ meta: [{ title: "概览 · xc-p" }] }))
+  .head(() => ({ meta: [{ title: "概览 · mh-p" }] }))
   .page(() => <OverviewPage />)
 
 interface NodeItem {
@@ -270,7 +270,10 @@ export function OverviewPage() {
               数据面健康
             </CardTitle>
             <CardDescription>
-              {health ? "Xray " + (health.xray.version || "未知版本") + " · " + health.xray.mode + " 模式" : "自检需要 1–4 秒，正在获取…"}
+              {health
+                ? "Mihomo " + (health.engine.version || "未知版本") + " · " + health.engine.mode + " 模式" +
+                  (health.engine.reloadNeeded ? " · 有待发布的配置变更" : "")
+                : "自检需要 1–4 秒，正在获取…"}
             </CardDescription>
             <CardAction>
               <StatusBadge state={health ? (health.overall === "ok" ? "up" : "degraded") : "unknown"} pulse={health?.overall === "ok"} />
@@ -286,13 +289,13 @@ export function OverviewPage() {
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
-                  <Metric label="进程 PID" value={health.xray.pid ?? "未运行"} />
-                  <Metric label="API 延迟" value={fmtMs(health.xray.apiLatencyMs)} tone={health.xray.apiLatencyMs > 1500 ? "degraded" : "ok"} />
-                  <Metric label="Outbound tag" value={fmtNumber(health.xray.tagCount)} />
-                  <Metric label="Rule" value={fmtNumber(health.xray.ruleCount)} />
-                  <Metric label="热操作" value={fmtNumber(health.xray.hotOpsTotal)} />
-                  <Metric label="待退休" value={fmtNumber(health.xray.pendingRetire)} />
-                  <Metric label="运行时长" value={fmtUptime(health.xray.runtimeSec)} />
+                  <Metric label="进程 PID" value={health.engine.pid ?? "未运行"} />
+                  <Metric label="REST 延迟" value={fmtMs(health.engine.apiLatencyMs)} tone={health.engine.apiLatencyMs > 1500 ? "degraded" : "ok"} />
+                  <Metric label="槽位" value={fmtNumber(health.engine.slotUsed) + " / " + fmtNumber(health.engine.slotCapacity)} />
+                  <Metric label="Provider" value={fmtNumber(health.engine.providerCount)} />
+                  <Metric label="Proxy" value={fmtNumber(health.engine.proxyCount)} />
+                  <Metric label="重启次数" value={fmtNumber(health.engine.restarts)} />
+                  <Metric label="运行时长" value={fmtUptime(health.engine.uptimeSec)} />
                   <Metric label="端口" value={health.ports.used + " / " + health.ports.pool} />
                 </div>
                 <Separator />

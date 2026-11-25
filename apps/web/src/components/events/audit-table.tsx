@@ -21,15 +21,23 @@ export interface AuditItem {
   detail_json?: string | null
 }
 
+/**
+ * 引擎操作审计（GET /api/apply-ops → engine_ops）。
+ * 字段是 Mihomo 时代的形状：op 例如 reload / assign / test_config，target 是 config 路径或槽位组名，
+ * detail 是一段 JSON（含 stderr / swapped 等细节）。旧的 tag/payload_json/stdout 列不再产生，
+ * 保留为可选只是为了不丢历史行的展示能力。
+ */
 export interface ApplyOpItem {
   id: number
   revision_id?: string | null
   at: number
   op: string
-  tag?: string | null
-  payload_json?: string | null
+  target?: string | null
+  detail?: string | null
   ok: number | boolean
   duration_ms?: number | null
+  tag?: string | null
+  payload_json?: string | null
   stdout?: string | null
   stderr?: string | null
   error_kind?: string | null

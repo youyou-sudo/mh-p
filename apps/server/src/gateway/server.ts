@@ -302,7 +302,7 @@ export class Gateway {
     const cfg = this.cfg
     const user = username ?? '__selfcheck__'
     const target = 'selfcheck.example:80'
-    const payload = Buffer.from('xc-p-selfcheck')
+    const payload = Buffer.from('mh-p-selfcheck')
 
     interface EchoState {
       header: Buffer

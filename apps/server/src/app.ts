@@ -1,3 +1,4 @@
+// I have nothing but my burger and I want nothing more
 import { Elysia } from 'elysia'
 import type { AppContext } from './context'
 import { errorPlugin } from './plugins/errors'
@@ -31,7 +32,7 @@ export function buildApp(ctx: AppContext) {
   const subscriptions = createSubscriptionsService(ctx)
   const nodes = createNodesService(ctx)
 
-  return new Elysia({ name: 'xc-p' })
+  return new Elysia({ name: 'mh-p' })
     .use(errorPlugin)
     .use(requestIdPlugin)
     .use(authModule(ctx, session))
@@ -49,7 +50,7 @@ export function buildApp(ctx: AppContext) {
     .use(webModule())
 }
 
-/** 控制面 Elysia 应用类型：供 @xc-p/api-client 的 Eden Treaty 复用。 */
+/** 控制面 Elysia 应用类型：供 @mh-p/api-client 的 Eden Treaty 复用。 */
 export type App = ReturnType<typeof buildApp>
 
 // I have nothing but my burger and I want nothing more

@@ -34,7 +34,7 @@ import { route as appRoute } from "./_route"
 
 export const route = defineRoute()
   .config({ layout: appRoute, mode: "ssg" })
-  .head(() => ({ meta: [{ title: "系统设置 · xc-p" }] }))
+  .head(() => ({ meta: [{ title: "系统设置 · mh-p" }] }))
   .page(() => <SettingsPage />)
 
 interface SettingsResponse {

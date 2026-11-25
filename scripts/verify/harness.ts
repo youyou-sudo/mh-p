@@ -5,7 +5,7 @@
  * 这里起三个本地进程/服务：
  *   1) origin      —— 目标站点（generate_204 / geoip / 慢速流）
  *   2) upstream    —— 一个最小的 HTTP 代理，被当作「订阅里的上游节点」
- *   3) panel       —— 真正的 xc-p 控制面（子进程），数据面用真 Xray 二进制
+ *   3) panel       —— 真正的 mh-p 控制面（子进程），数据面用真 Xray 二进制
  *
  * 链路：client → 网关:19090（认证 user=节点ID）→ in-<node>(环回 http 入站)
  *       → out-<node>(http outbound) → upstream:19081 → origin:19080
@@ -69,7 +69,7 @@ export function startOrigin(port = PORTS.origin, opts: { ip?: string; country?: 
           country_code: opts.country ?? 'HK',
           region: opts.region ?? 'Hong Kong',
           asn: 'AS64500',
-          isp: 'xc-p verify',
+          isp: 'mh-p verify',
         })
       }
       if (url.pathname === '/slow') {
@@ -272,7 +272,7 @@ export async function startPanel(opts: { settings?: Record<string, unknown>; dat
       PANEL_PORT: String(PORTS.panel),
       ADMIN_PASSWORD: 'verify-admin',
       XRAY_BINARY: XRAY_BIN,
-      XCP_BOOTSTRAP_SETTINGS: JSON.stringify(bootstrap),
+      MHP_BOOTSTRAP_SETTINGS: JSON.stringify(bootstrap),
       LOG_LEVEL: 'info',
     },
     stdout: 'pipe',

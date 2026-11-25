@@ -1,51 +1,119 @@
 /**
- * xc-p 控制面入口（PANEL.md §5.2）：Bun + Elysia 控制面 + 同进程网关。
- * 启动顺序：DATA_DIR → SQLite 迁移 → settings → 密钥 → Xray 进程 → 网关 → 调度器 → HTTP。
+ * mh-p 控制面入口：Bun + Elysia 控制面 + 同进程网关 + **Mihomo 数据面**。
+ *
+ * 启动顺序（顺序本身是正确性的一部分）：DATA_DIR → SQLite 迁移 → settings →
+ * 二进制解析 → 渲染并落盘 config.yaml → 拉起 Mihomo 等 REST 就绪 → 发布（结构 reload + 槽位指派）
+ * → 网关 → 调度器 → HTTP。
+ *
+ * 为什么必须"先有 config 才能起进程"：Mihomo 的 listener 集合是配置期的（没有 /listeners API），
+ * 进程只会按 -f 指定的文件构建 listener；而且 `-f` 指向不存在的文件时它会**自动创建默认配置**
+ * 并"成功"启动（一个没有 external-controller 的假数据面），所以启动前我们必须自己把文件写好。
  */
-import { and, desc, eq, lt, notInArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNotNull, lt, notInArray, sql } from 'drizzle-orm'
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+/**
+ * 在 `.cache/mihomo/<version>/<asset>/` 里找 `build:exe -- --fetch-only` 解出的二进制。
+ *
+ * 为什么需要：报错信息里的第 ③ 条修法就是「跑 --fetch-only」，但它把文件放进了 .cache，
+ * 而解析顺序原本只看 PATH 与 ./.tools —— 于是跑完仍然报「找不到 Mihomo 二进制」（已被用户踩到）。
+ * 取版本号最大的目录；asset 目录名随平台/版本变化（mihomo-windows-amd64-v1.19.33 等），所以再扫一层。
+ */
+function findCachedMihomo(root: string): { path: string; source: string } | null {
+  const base = join(root, '.cache', 'mihomo')
+  if (!existsSync(base)) return null
+  const bin = process.platform === 'win32' ? 'mihomo.exe' : 'mihomo'
+  let versions: string[] = []
+  try {
+    versions = readdirSync(base, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+  } catch {
+    return null
+  }
+  versions.sort((a, b) => cmpVersion(b, a))
+  for (const version of versions) {
+    const dir = join(base, version)
+    const direct = join(dir, bin)
+    if (existsSync(direct)) return { path: direct, source: '.cache/mihomo（--fetch-only）' }
+    let assets: string[] = []
+    try {
+      assets = readdirSync(dir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)
+    } catch {
+      continue
+    }
+    for (const asset of assets) {
+      const p = join(dir, asset, bin)
+      if (existsSync(p)) return { path: p, source: '.cache/mihomo（--fetch-only）' }
+    }
+  }
+  return null
+}
+
+/** 目录名里的版本号比较（v1.19.33 > v1.19.9；非法段按 0 处理） */
+function cmpVersion(a: string, b: string): number {
+  const pa = a.split(/[^0-9]+/).filter(Boolean).map(Number)
+  const pb = b.split(/[^0-9]+/).filter(Boolean).map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d !== 0) return d
+  }
+  return a.localeCompare(b)
+}
 import { config, ensureDataDirs, paths, DEFAULT_ADMIN_PASSWORD } from './config'
 import { openDb, type Db } from './core/db'
-import { admin, nodeAliases, nodeCredentials, nodeStatus, xrayApplyOps } from './core/schema'
+import {
+  admin,
+  engineOps,
+  nodeAliases,
+  nodeCheckRuns,
+  nodeCredentials,
+  nodeStatus,
+  nodes as nodesT,
+  revisionNodes,
+  runtimeRevisions,
+} from './core/schema'
 import { runMigrations, schemaVersion } from './core/migrations'
 import { SettingsStore } from './core/settings'
 import { EventBus } from './core/events'
 import { RoutingTable } from './core/routing'
 import { ConnectionTracker } from './core/connlog'
+import { Semaphore } from './core/semaphore'
 import { logger } from './core/log'
 import { decryptSecret, safeEqual } from './core/crypto'
 import { JobQueue, APPLY_QUEUE } from './jobs/queue'
 import { Scheduler, inMaintenanceWindow, staleExpiryTask } from './jobs/scheduler'
 import { AuthService } from './modules/auth/service'
 import { SyncService } from './sync/sync'
-import { Detector } from './detect/detect'
-import { Publisher } from './publish/publish'
-import { ApplyEngine } from './xray/apply'
-import { Reconciler } from './xray/reconcile'
-import { XrayCli } from './xray/cli'
-import { PortPool } from './xray/ports'
-import { XrayProcess } from './xray/process'
-import { resolveXrayBinary, xrayNotFoundHint } from './xray/binary'
-import { embeddedXrayInfo } from './xray/embedded'
-import { RetireQueue } from './xray/retire'
+import { probeViaSlot, sampleProviders } from './detect/collector'
+import { persistCheckResult, type CheckResult } from './detect/persist'
+import { MihomoClient } from './mihomo/client'
+import { MihomoProcess } from './mihomo/process'
+import { embeddedMihomoInfo, materializeEmbeddedMihomo } from './mihomo/embedded'
+import { providerNameOf } from './mihomo/config'
+import { SlotManager } from './publish/slots'
+import { MihomoPublisher, type PublishOutcome } from './publish/mihomo-publish'
 import { Gateway } from './gateway/server'
 import type { GatewayConfig } from './gateway/types'
-import { buildDesiredNodes } from './publish/desired'
-import type { ApplyPlan } from './xray/plan'
 import { buildApp } from './app'
-import { canBind } from './xray/ports'
 import type { AppContext, HealthReport } from './context'
+
+/** 数据面工作目录（= Mihomo -d）：config.yaml、providers/、cache.db 都在这里 */
+const ENGINE_DIR = join(paths.runtime, 'mihomo')
+const CONFIG_PATH = join(ENGINE_DIR, 'config.yaml')
+const PROVIDER_DIR = join(ENGINE_DIR, 'providers')
 
 async function main() {
   await ensureDataDirs()
 
   const db = openDb(paths.db)
   const applied = runMigrations(db)
-  logger.info('xc-p 启动中… DATA_DIR=' + config.dataDir + '（应用了 ' + applied + ' 个迁移，schema v' + schemaVersion(db) + '）')
+  logger.info('mh-p 启动中… DATA_DIR=' + config.dataDir + '（应用了 ' + applied + ' 个迁移，schema v' + schemaVersion(db) + '）')
 
   const settings = new SettingsStore(db)
-  // 注意：settings.xray.logLevel 控制的是 **Xray 进程** 的日志级别（写入 base 配置），
-  // 面板自身的日志级别由 LOG_LEVEL 环境变量控制（默认 info）。
-  process.env.XRAY_LOG_LEVEL = settings.get().xray.logLevel
   const events = new EventBus(db)
   const routing = new RoutingTable(db)
   const conns = new ConnectionTracker(db, events)
@@ -60,7 +128,7 @@ async function main() {
     if (config.adminPassword === DEFAULT_ADMIN_PASSWORD) {
       logger.warn(
         '当前管理员口令是内置默认值「' + DEFAULT_ADMIN_PASSWORD + '」，登录后请立即修改：' +
-          '面板「系统设置 → 管理员口令」，或执行 bun run admin:password <新口令>',
+          '面板「系统设置 → 管理员口令」，或执行 bun run admin:vxpfwhrw <新口令>',
       )
     }
   }
@@ -69,42 +137,199 @@ async function main() {
   jobs.markZombies()
   conns.reapOrphans()
 
-  const sync = new SyncService({ db, settings, events })
-  // Xray 二进制定位：显式配置 → 内嵌（打包版）→ PATH → ./.tools 等本地位置。
-  // 打包版在启动时会把内嵌的对应平台 xray 解出到 DATA_DIR/bin 并校验 SHA256；
-  // 源码运行时没有内嵌二进制，回退到外部查找。找不到时给出可执行的修复提示（PANEL.md §14.1）。
-  const embedded = embeddedXrayInfo()
-  if (embedded) {
+  // ------------------------------------------------------------------ 数据面（Mihomo）
+  // 二进制解析顺序：settings.engine.binary（已被 MIHOMO_BINARY 覆盖过）→ 内嵌解出 → PATH → ./.tools。
+  // 打包版在启动时把内嵌二进制解到 DATA_DIR/bin 并校验 SHA256；源码运行时没有内嵌，回退外部查找。
+  let resolved: { path: string; source: string } | null = null
+  let resolvedAt = 0
+  const resolveBinary = (): { path: string; source: string } | null => {
+    if (resolved && Date.now() - resolvedAt < 5000) return resolved
+    const configured = settings.get().engine.binary || 'mihomo'
+    const hit = probeBinary(configured, 'settings.engine.binary / MIHOMO_BINARY')
+    if (hit) {
+      resolved = hit
+      resolvedAt = Date.now()
+      return hit
+    }
+    if (configured.includes('/') || configured.includes('\\')) {
+      logger.warn('配置的 Mihomo 二进制不存在：' + configured + '，继续尝试内嵌 / PATH / ./.tools')
+    }
+    const embedded = materializeEmbeddedMihomo()
+    if (embedded) {
+      resolved = { path: embedded.path, source: embedded.source }
+      resolvedAt = Date.now()
+      return resolved
+    }
+    const fromPath = probeBinary('mihomo', 'PATH')
+    if (fromPath) {
+      resolved = fromPath
+      resolvedAt = Date.now()
+      return fromPath
+    }
+    const local = probeBinary(join(process.cwd(), '.tools', process.platform === 'win32' ? 'mihomo.exe' : 'mihomo'), './.tools')
+    if (local) {
+      resolved = local
+      resolvedAt = Date.now()
+      return local
+    }
+    // `bun run build:exe -- --fetch-only` 把发行包解到 .cache/mihomo/<version>/<asset>/mihomo[.exe]。
+    // 这是报错信息里给开发者的第 ③ 条修法，解析器必须真能找到它，否则那条提示就是假的
+    //（用户已经踩到过：跑完 --fetch-only 仍然报"找不到 Mihomo 二进制"）。
+    const cached = findCachedMihomo(process.cwd())
+    resolved = cached
+    resolvedAt = Date.now()
+    return cached
+  }
+
+  const embeddedInfo = embeddedMihomoInfo()
+  if (embeddedInfo) {
     logger.info(
-      '内嵌 Xray：' + embedded.version + '（' + embedded.platform + '/' + embedded.arch +
-        '，' + (embedded.size / 1024 / 1024).toFixed(1) + ' MB，sha256=' + embedded.sha256.slice(0, 12) + '…）',
+      '内嵌 Mihomo：' + embeddedInfo.version + '（' + embeddedInfo.platform + '/' + embeddedInfo.arch +
+        '，' + (embeddedInfo.size / 1024 / 1024).toFixed(1) + ' MB，sha256=' + embeddedInfo.sha256.slice(0, 12) + '…）',
     )
   }
-  const resolveBin = () => {
-    const configured = settings.get().xray.binary || config.xrayBinary
-    return resolveXrayBinary(configured)
-  }
-  const initialBin = resolveBin()
-  if (initialBin) {
-    logger.info('Xray 二进制: ' + initialBin.path + '（来源：' + initialBin.source + '）')
-  } else {
-    logger.error(xrayNotFoundHint(settings.get().xray.binary))
-  }
-  const cli = new XrayCli({
-    binary: () => resolveBin()?.path ?? settings.get().xray.binary,
-    server: () => settings.get().xray.apiAddress,
-    timeoutSec: () => settings.get().xray.apiTimeoutSec,
-    tmpDir: () => paths.tmp,
-  })
-  const ports = new PortPool(db, settings)
-  ports.reap()
-  const retire = new RetireQueue(db, cli, settings, events)
+  const initialBinary = resolveBinary()
+  if (initialBinary) logger.info('Mihomo 二进制: ' + initialBinary.path + '（来源：' + initialBinary.source + '）')
+  else logger.error(mihomoNotFoundHint(settings.get().engine.binary))
 
-  const xrayProcess = new XrayProcess(settings, events, {
-    creds: () => directCredentials(db),
+  const engineSettings = () => settings.get().engine
+  const client = new MihomoClient({
+    baseUrl: () => 'http://' + engineSettings().apiAddress,
+    secret: () => engineSettings().secret,
+    timeoutMs: () => engineSettings().apiTimeoutMs,
+  })
+  const slots = new SlotManager(db, () => ({
+    capacity: engineSettings().slotCapacity,
+    portStart: engineSettings().inboundPortStart,
+    portEnd: engineSettings().inboundPortEnd,
+  }))
+
+  const mihomoProcess = new MihomoProcess({
+    binary: () => resolveBinary()?.path ?? engineSettings().binary,
+    configPath: () => CONFIG_PATH,
+    dataDir: () => ENGINE_DIR,
+    client,
+    readyTimeoutMs: () => 20_000,
   })
 
-  // 网关配置投影
+  const publisher = new MihomoPublisher({
+    db,
+    events,
+    client,
+    process: mihomoProcess,
+    slots,
+    routing,
+    engine: () => {
+      const e = engineSettings()
+      const d = settings.get().detect
+      return {
+        externalController: e.apiAddress,
+        secret: e.secret,
+        logLevel: e.logLevel,
+        // 面板给每个 listener 显式绑 proxy（槽位组），规则只做兜底 → 固定 rule 模式
+        mode: 'rule' as const,
+        slotCapacity: e.slotCapacity,
+        portStart: e.inboundPortStart,
+        portEnd: e.inboundPortEnd,
+        testUrl: d.testUrl,
+        healthCheckIntervalSec: 300,
+      }
+    },
+    policy: () => {
+      const p = settings.get().publish
+      return { policy: p.policy, requireMinNodes: p.requireMinNodes }
+    },
+    dirs: { configDir: ENGINE_DIR, configPath: CONFIG_PATH, providerDir: PROVIDER_DIR },
+  })
+
+  // ------------------------------------------------------------------ 发布（含别名路由）
+  const applyRoutingAliases = (): void => {
+    const base = routing.snapshot()
+    const aliases = db
+      .select({ alias: nodeAliases.alias, node_id: nodeAliases.node_id })
+      .from(nodeAliases)
+      .where(eq(nodeAliases.active, 1))
+      .all()
+    if (aliases.length === 0) return
+    const entries = base.map((e) => ({ ...e }))
+    for (const a of aliases) {
+      const hit = base.find((e) => e.nodeId === a.node_id)
+      if (hit) entries.push({ ...hit, username: a.alias })
+    }
+    routing.replace(entries)
+    routing.persist()
+  }
+  const publish = async (o: { reason?: string; dryRun?: boolean } = {}): Promise<PublishOutcome> => {
+    const res = await publisher.publish(o)
+    // 别名只在发布成功后补：发布失败时路由表保持原状，避免把别名指到错端口
+    if (!o.dryRun && res.ok) applyRoutingAliases()
+    return res
+  }
+
+  // ------------------------------------------------------------------ 检测（两条互补路径）
+  /** 周期采样：provider 健康历史 → node_status（不经过本进程发请求，拿到不 error_kind） */
+  const sample = () => sampleProviders({ db, settings, events, client })
+
+  /**
+   * 按需检测：经槽位 listener 发真实请求，能拿到 error_kind 与出口 IP。
+   * 没发布到槽位的节点不写库（那不是"坏"，是"还没上线"），只在返回值里说明原因。
+   */
+  const checkNodes = async (
+    nodeIds: string[] | undefined,
+    depth: 'lite' | 'full',
+    opts: { includeQuarantined?: boolean; source?: string; onProgress?: (d: number, t: number) => void } = {},
+  ): Promise<CheckResult[]> => {
+    const s = settings.get()
+    const rows = db
+      .select({
+        id: nodesT.id,
+        enabled: nodesT.enabled,
+        // 没有 node_status 行时按 unknown：这类节点既不算坏也不算好，检测要照做
+        state: sql<string>`COALESCE(${nodeStatus.state}, 'unknown')`,
+      })
+      .from(nodesT)
+      .leftJoin(nodeStatus, eq(nodeStatus.node_id, nodesT.id))
+      .where(nodeIds && nodeIds.length > 0 ? inArray(nodesT.id, nodeIds) : isNotNull(nodesT.proxy_name))
+      .all()
+    const portByNode = slots.portByNode()
+    const targets = rows.filter((r) => r.enabled === 1 && (opts.includeQuarantined || r.state !== 'quarantined'))
+    const results: CheckResult[] = []
+    let done = 0
+    const sem = new Semaphore(Math.max(1, s.detect.concurrency))
+    await Promise.all(
+      targets.map((t) =>
+        sem.run(async () => {
+          const port = portByNode.get(t.id)
+          let result: CheckResult
+          if (!port) {
+            // 没槽位 = 没发布：不落库、不判死（否则刚导入还没发布的节点会被一路隔离）
+            result = {
+              nodeId: t.id,
+              ok: false,
+              stageReached: 'mihomo',
+              errorMsg: '节点未发布到槽位（无 slot），无法经槽位探测；先发布再检测',
+            }
+          } else {
+            result = await probeViaSlot({
+              nodeId: t.id,
+              port,
+              testUrl: s.detect.testUrl,
+              totalTimeoutMs: s.detect.totalTimeoutMs,
+              ipEchoUrls: s.detect.ipEchoUrls,
+              depth,
+            })
+            persistCheckResult({ db, settings, events }, result, opts.source ?? 'manual', depth, Date.now())
+          }
+          results.push(result)
+          done++
+          opts.onProgress?.(done, targets.length)
+        }),
+      ),
+    )
+    return results
+  }
+
+  // ------------------------------------------------------------------ 网关
   const gatewayConfig = (): GatewayConfig => {
     const s = settings.get().gateway
     return {
@@ -122,7 +347,6 @@ async function main() {
     }
   }
 
-  // 认证失败封禁（§10.1）
   const failures = new Map<string, { count: number; bannedUntil: number }>()
   const authFailureLog: number[] = []
 
@@ -133,18 +357,17 @@ async function main() {
       if (!entry) return undefined
       return { nodeId: entry.nodeId, port: entry.port, tag: entry.tag }
     },
-    verifyCredential: (username: string, password: string) => {
+    verifyCredential: (username: string, vxpfwhrw: string) => {
       const entry = routing.get(username)
       if (!entry) return false
       if (settings.get().gateway.authMode === 'username-only') return true
-      const row = db
-        .select({ password_enc: nodeCredentials.password_enc })
-        .from(nodeCredentials)
-        .where(eq(nodeCredentials.node_id, entry.nodeId))
-        .get()
+      const row = db.select().from(nodeCredentials).where(eq(nodeCredentials.node_id, entry.nodeId)).get()
       if (!row) return false
+      // 凭据密文列名在本仓库源文件里是脱敏字面量（写死会与 schema 真实属性名不一致），按后缀取
+      const enc = Object.entries(row as unknown as Record<string, unknown>).find(([k]) => k.endsWith('_enc'))?.[1]
+      if (typeof enc !== 'string') return false
       try {
-        return safeEqual(decryptSecret(row.password_enc), password)
+        return safeEqual(decryptSecret(enc), vxpfwhrw)
       } catch {
         return false
       }
@@ -174,183 +397,145 @@ async function main() {
     log: (level, msg, detail) => conns.log(level, msg, detail),
   })
 
-  const engine = new ApplyEngine({ db, cli, settings, events, routing, retire })
-  const reconciler = new Reconciler({ db, cli, settings, events, engine: () => engine, retire })
+  const sync = new SyncService({
+    db,
+    settings,
+    events,
+    // 懒取值：client 的构造早于 SyncService，但语义上仍按"引擎就绪才可用"处理；
+    // 未注入时 sync 会以 engine_unavailable loud 失败，不会把节点静默标成不可发布。
+    client: () => client,
+    // 必须与 publisher 的 dirs.providerDir 是同一个目录：否则文件写了但 Mihomo 找不到，组永远为空
+    engineDir: () => ENGINE_DIR,
+    // 首次接入某个订阅时 provider 还不在 config 里，PUT 会 404。
+    // 这里给 sync 一个「只同步结构」的入口（绕过 requireMinNodes 安全阀：
+    // 此刻通常还没有可发布节点，但 provider 段必须先进引擎，否则永远同步不进来）。
+    ensureProvider: async (provider) => {
+      const r = await publisher.syncStructure()
+      if (!r.ok) throw new Error('provider 首次加载失败（结构同步未成功）：' + (r.error ?? '未知原因') + ' [' + provider + ']')
+    },
+  })
 
+  const scheduler = new Scheduler()
   /**
-   * 检测前的数据面准备（PANEL.md AC-12：加订阅 → 同步 → 检测 → 发布）。
-   * 检测走 Xray 的每节点环回入站，所以节点必须先由 ApplyEngine 建好；
-   * 这里按需补建，不产生 runtime revision（与启动重放一致）。
+   * 槽位端口"可用"= 要么我们自己的 listener 正在监听（connect 成功），要么它还空着（bind 成功）。
+   * 只探测 bind 会在数据面跑起来之后**永远失败**（引擎已经把槽位端口全占了），
+   * 那会把一个完全健康的实例报成 degraded——这正是首轮真机联调踩到的坑。
    */
-  const ensureNodeInDataplane = async (
-    nodeId: string,
-  ): Promise<
-    { ok: true; port: number; release?: () => Promise<void> } | { ok: false; errorMsg: string }
-  > => {
-    const build = (includeQuarantined: boolean) =>
-      buildDesiredNodes(db, settings, ports, { nodeIds: [nodeId], includeQuarantined })
-    const built = build(false)
-    let desired = built.desired.find((d) => d.nodeId === nodeId)
-    let temporary = false
-    if (!desired) {
-      // 被隔离的节点在 healthy_only 策略下不在期望状态，但检测必须还能测它，
-      // 否则隔离后永远无法恢复。临时加进数据面，探测完由 release 立即移除。
-      const quarantined = build(true).desired.find((d) => d.nodeId === nodeId)
-      if (quarantined) {
-        desired = quarantined
-        temporary = true
-      }
-    }
-    if (!desired) {
-      const detail = built.errors.find((e) => e.nodeId === nodeId)?.message
-      return {
-        ok: false,
-        errorMsg: detail ?? '节点不在可发布期望状态（未启用或协议不支持），无法进入数据面',
-      }
-    }
-    const node = desired
-    const appliedOf = () => engine.loadedApplied().find((a) => a.nodeId === nodeId)
-    const inSync = (a: ReturnType<typeof appliedOf>) =>
-      !!a && a.contentHash === node.contentHash && a.port === node.inboundPort
-    if (inSync(appliedOf())) return { ok: true, port: node.inboundPort }
-
-    const prev = appliedOf()
-    const plan: ApplyPlan = {
-      add: prev ? [] : [node],
-      change: prev ? [{ next: node, prev }] : [],
-      remove: prev
-        ? [
-            {
-              nodeId: prev.nodeId,
-              outboundTag: prev.outboundTag,
-              inboundTag: prev.inboundTag,
-              ruleTag: prev.ruleTag,
-              port: prev.port,
-            },
-          ]
-        : [],
-      keep: [],
-      drift: { outboundTags: [], inboundTags: [], ruleTags: [] },
-      cleanup: [],
-      missingInDataplane: [],
-    }
-    const res = await engine.applyPlan(plan, null)
-    if (!res.ok) {
-      return { ok: false, errorMsg: '节点进入数据面失败：' + (res.error?.message ?? '未知错误') }
-    }
-    if (!inSync(appliedOf())) {
-      return { ok: false, errorMsg: '节点未能进入数据面（构建校验未通过，详见该节点的发布错误）' }
-    }
-    const release = temporary
-      ? async () => {
-          const current = engine.loadedApplied().find((a) => a.nodeId === nodeId)
-          if (!current || current.contentHash !== node.contentHash || current.port !== node.inboundPort) return
-          await engine.applyPlan(
-            {
-              add: [],
-              change: [],
-              remove: [
-                {
-                  nodeId: node.nodeId,
-                  outboundTag: node.outboundTag,
-                  inboundTag: node.inboundTag,
-                  ruleTag: node.ruleTag,
-                  port: node.inboundPort,
-                },
-              ],
-              keep: [],
-              drift: { outboundTags: [], inboundTags: [], ruleTags: [] },
-              cleanup: [],
-              missingInDataplane: [],
-            },
-            null,
-          )
-        }
-      : undefined
-    return { ok: true, port: node.inboundPort, release }
+  const canBind = async (port: number, hostname = '127.0.0.1'): Promise<boolean> => {
+    if (await canConnect(port, hostname)) return true
+    return canBindPort(port, hostname)
   }
 
   const gatewayInfo = () => {
     const { host, port } = parseListen(settings.get().gateway.listen)
     return { host, port, enabled: settings.get().gateway.enabled }
   }
-  const detector = new Detector({
-    db,
-    settings,
-    events,
-    cli,
-    gatewayInfo,
-    ensureNode: ensureNodeInDataplane,
-  })
-  const publisher = new Publisher({
-    db,
-    cli,
-    settings,
-    events,
-    ports,
-    engine,
-    reconciler,
-    process: xrayProcess,
-    routing,
-    retire,
-    prePublishCheck: async (nodeIds) => {
-      if (!nodeIds.length) return
-      const targets = detector.loadTargets(nodeIds, true).filter((t) => {
-        const st = db
-          .select({ next_check_at: nodeStatus.next_check_at })
-          .from(nodeStatus)
-          .where(eq(nodeStatus.node_id, t.nodeId))
-          .get()
-        return !st?.next_check_at || st.next_check_at <= Date.now()
-      })
-      if (targets.length) await detector.run(targets, { source: 'publish_gate', depth: 'lite' })
-    },
-  })
 
-  const scheduler = new Scheduler()
-
-  // ------------------------------------------------------------------ 健康检查（§14.2 / §15）
+  // ------------------------------------------------------------------ 健康检查
   const health = async (): Promise<HealthReport> => {
     const checks: HealthReport['checks'] = []
-    const t0 = Date.now()
-    const lso = await cli.lso()
-    const apiLatencyMs = Date.now() - t0
-    const lsi = await cli.lsi()
-    const lsr = await cli.lsrules()
-    const st = xrayProcess.getState()
+    const s = settings.get()
+    const e = s.engine
+    const st = mihomoProcess.status()
 
-    checks.push({ id: 'xray.version', label: 'xray 二进制可执行', ok: st.pid !== null || settings.get().xray.mode === 'external', detail: st.status + (st.pid ? ' pid=' + st.pid : ''), level: st.status === 'crashed' ? 'error' : 'ok' })
-    checks.push({ id: 'xray.api', label: 'Xray API 可达（lso）', ok: lso.result.ok, detail: lso.result.ok ? 'outbounds=' + lso.outbounds.length : lso.result.stderr.slice(0, 160), level: lso.result.ok ? 'ok' : 'error' })
+    const bin = resolveBinary()
     checks.push({
-      id: 'xray.bind',
-      label: '数据面入站只绑 127.0.0.1',
-      ok: lsi.inbounds.every((i) => !i.listen || i.listen === '127.0.0.1' || i.listen === '::1'),
-      detail: lsi.inbounds.filter((i) => i.listen && i.listen !== '127.0.0.1' && i.listen !== '::1').map((i) => i.tag + '@' + i.listen).join(', ') || '全部环回',
-      level: 'ok',
+      id: 'engine.binary',
+      label: 'Mihomo 二进制可执行',
+      ok: !!bin,
+      detail: bin ? bin.path + '（' + bin.source + '）' : mihomoNotFoundHint(e.binary),
+      level: bin ? 'ok' : 'error',
     })
-    const bindable = await ports.probeBindable(8)
-    const portStatsForCheck = ports.stats()
-    const failedBind = bindable.filter((b) => !b.ok)
-    const portCheckOk = bindable.length > 0 && failedBind.length === 0
+
+    const t0 = Date.now()
+    let restOk = false
+    let version = st.version
+    try {
+      const v = await client.version()
+      version = v.version ?? version
+      restOk = !!v.version
+    } catch {
+      /* 下面统一记录 */
+    }
+    const apiLatencyMs = Date.now() - t0
     checks.push({
-      id: 'ports.bind',
-      label: '端口池可用端口可 bind',
-      ok: portCheckOk,
+      id: 'engine.rest',
+      label: 'Mihomo REST 可达（GET /version）',
+      ok: restOk,
+      detail: restOk ? (version ?? '') + ' · ' + apiLatencyMs + 'ms' : '不可达（' + e.apiAddress + '）',
+      level: restOk ? 'ok' : 'error',
+    })
+
+    const configExists = existsSync(CONFIG_PATH)
+    const built = configExists
+      ? await mihomoProcess.testConfig(CONFIG_PATH)
+      : { ok: false, code: -1, stdout: '', stderr: 'config 不存在：' + CONFIG_PATH }
+    checks.push({
+      id: 'engine.config',
+      label: 'config.yaml 通过 mihomo -t 构建校验',
+      ok: built.ok,
+      detail: built.ok ? CONFIG_PATH : (built.stderr || built.stdout).slice(0, 240),
+      level: built.ok ? 'ok' : 'error',
+    })
+
+    const slotRows = slots.load()
+    const slotUsed = slotRows.filter((a) => a.nodeId).length
+    const probePorts: number[] = []
+    for (let i = 0; i < Math.min(4, e.slotCapacity); i++) probePorts.push(e.inboundPortStart + i)
+    const bindable: { port: number; ok: boolean }[] = []
+    for (const port of probePorts) bindable.push({ port, ok: await canBind(port, '127.0.0.1') })
+    const slotsOk = bindable.every((b) => b.ok)
+    checks.push({
+      id: 'engine.slots',
+      label: '槽位端口在监听或空闲',
+      ok: slotsOk,
       detail:
-        bindable.length === 0
-          ? '端口池已耗尽（' + portStatsForCheck.used + ' / ' + portStatsForCheck.pool + '），没有可探测的空闲端口'
-          : failedBind.length > 0
-            ? '不可 bind：' + failedBind.map((b) => b.port).join(',')
-            : '空闲端口 ' + bindable[0]!.port + '–' + bindable[bindable.length - 1]!.port + ' 可 bind（已分配端口不计入）',
-      level: portCheckOk ? 'ok' : 'degraded',
+        '槽位 ' + slotUsed + '/' + e.slotCapacity + '，端口 ' + e.inboundPortStart + '..' +
+        (e.inboundPortStart + e.slotCapacity - 1) +
+        (slotsOk
+          ? ' 前 ' + bindable.length + ' 个正常'
+          : '；异常：' + bindable.filter((b) => !b.ok).map((b) => b.port).join(',') + '（既没在监听也不能 bind）'),
+      level: slotsOk ? 'ok' : 'degraded',
     })
-    const listen = parseListen(settings.get().gateway.listen)
+
+    // provider 必须逐个读：全局 /providers/proxies 在 1000 proxy 时是 7.46MB/405ms
+    const subs = sync.listSubscriptions(true)
+    let providerCount = 0
+    let proxyCount = 0
+    const providerErrors: string[] = []
+    for (const sub of subs) {
+      try {
+        const info = await client.provider(providerNameOf(sub.id))
+        providerCount++
+        proxyCount += info?.proxies?.length ?? 0
+      } catch (err) {
+        providerErrors.push(providerNameOf(sub.id) + '：' + (err instanceof Error ? err.message : String(err)).slice(0, 80))
+      }
+    }
+    checks.push({
+      id: 'engine.providers',
+      label: '订阅 provider 已加载',
+      ok: providerErrors.length === 0,
+      detail:
+        providerCount + '/' + subs.length + ' 个 provider，共 ' + proxyCount + ' 个 proxy' +
+        (providerErrors.length ? '；失败：' + providerErrors.slice(0, 3).join('；') : ''),
+      level: subs.length === 0 ? 'ok' : providerErrors.length ? 'degraded' : 'ok',
+    })
+
+    let reloadNeeded = false
+    try {
+      reloadNeeded = (await publisher.plan()).configChanged
+    } catch {
+      /* plan 失败不影响健康报告本身 */
+    }
+
+    const listen = parseListen(s.gateway.listen)
     const gwOk = await canBind(listen.port, listen.host)
     checks.push({
       id: 'gateway.bind',
       label: '网关 listener 正常',
       ok: !gatewayError,
-      detail: gatewayError ?? settings.get().gateway.listen + '（可 bind=' + gwOk + '）',
+      detail: gatewayError ?? s.gateway.listen + '（可 bind=' + gwOk + '）',
       level: gatewayError ? 'error' : 'ok',
     })
     const gwStats = gateway.stats()
@@ -366,37 +551,39 @@ async function main() {
     })()
     checks.push({ id: 'sqlite', label: 'SQLite 可读写', ok: sqliteOk, detail: sqliteOk ? 'WAL 模式' : '查询失败', level: sqliteOk ? 'ok' : 'error' })
 
-    const portStats = ports.stats()
     const failures5m = authFailureLog.filter((t) => t > Date.now() - 300_000).length
     const overall = checks.every((c) => c.level === 'ok') ? 'ok' : 'degraded'
+    const publishStatus = publisher.currentStatus()
 
     return {
       panel: 'ok',
       sqlite: sqliteOk ? 'ok' : 'error',
       schemaVersion: schemaVersion(db),
-      xray: {
-        mode: settings.get().xray.mode,
-        pid: st.pid,
+      engine: {
+        mode: e.mode,
         status: st.status,
-        version: st.version,
-        api: lso.result.ok ? 'ok' : 'unreachable',
+        pid: st.pid,
+        version,
+        rest: restOk ? 'ok' : 'unreachable',
         apiLatencyMs,
-        tagCount: lso.outbounds.length,
-        ruleCount: lsr.supported ? lsr.rules.length : -1,
-        rulesSupported: lsr.supported,
-        hotOpsTotal: retire.hotOpsTotal(),
-        pendingRetire: retire.count(),
-        runtimeSec: Math.floor((Date.now() - (st.startedAt ?? Date.now())) / 1000),
+        slotUsed,
+        slotCapacity: e.slotCapacity,
+        providerCount,
+        proxyCount,
+        uptimeSec: Math.floor((Date.now() - (st.startedAt ?? Date.now())) / 1000),
         restarts: st.restarts,
+        lastPublishAt: publishStatus.lastPublishAt,
+        reloadNeeded,
       },
       gateway: {
-        listen: settings.get().gateway.listen,
-        enabled: settings.get().gateway.enabled,
+        listen: s.gateway.listen,
+        enabled: s.gateway.enabled,
         activeConns: gwStats.activeConns,
         authFailures5m: failures5m,
         banned: [...failures.values()].filter((f) => f.bannedUntil > Date.now()).length,
       },
-      ports: { pool: portStats.pool, used: portStats.used, cooling: portStats.cooling, bindable },
+      // 端口池已被槽位取代：pool/used 用槽位口径填，cooling 恒 0（不再有延迟释放队列）
+      ports: { pool: e.slotCapacity, used: slotUsed, cooling: 0, bindable },
       checks,
       overall,
     }
@@ -414,61 +601,24 @@ async function main() {
     return n
   }
 
+  /**
+   * 重启数据面：进程重启会丢失内存里的槽位选中项（Mihomo 的 select 状态不持久化），
+   * 所以必须紧接着 publish 一次把每个槽位重新 PUT 回目标节点。
+   */
   const restartDataplane = async (): Promise<{ ok: boolean; replayed: number; error?: string }> => {
     try {
-      await xrayProcess.restart()
-      await waitForApi(cli, 30_000)
-      // 重启后重新探测版本：二进制可能刚被替换（例如把 .tools/xray 换成带 lsrules 的新构建），
-      // 不刷新会让 /api/health 的 xray.version 一直显示启动时那一版的旧值。
-      const probe = await xrayProcess.probe()
-      logger.info('xray ' + (probe.version || '?') + ' 已就绪（重启后）')
+      await mihomoProcess.restart()
     } catch (e) {
       return { ok: false, replayed: 0, error: (e as Error).message }
     }
-    // 全量重放（§9.4）
     try {
-      const snap = buildDesiredNodes(db, settings, ports)
-      const result = await engine.applyPlan(
-        { add: snap.desired, change: [], remove: [], keep: [], drift: { outboundTags: [], inboundTags: [], ruleTags: [] }, cleanup: [], missingInDataplane: [] },
-        null,
-      )
-      rebuildRouting(settings, db, routing)
-      events.info('xray.replayed', '数据面重启完成，已重放 ' + snap.desired.length + ' 个节点')
-      return { ok: result.ok, replayed: snap.desired.length, error: result.error?.message }
+      const res = await publish({ reason: 'restart' })
+      events.info('engine.replayed', '数据面已重启，重放 ' + res.assigned + ' 个槽位' + (res.reloaded ? '（结构已 reload）' : ''))
+      return { ok: res.ok, replayed: res.assigned, error: res.error }
     } catch (e) {
       return { ok: false, replayed: 0, error: (e as Error).message }
     }
   }
-
-  let crashLoop = 0
-  xrayProcess.onExit(() => {
-    // 启动后立刻退出（例如管理端口被占、二进制不可执行）会形成重启风暴：
-    // 用指数退避，并在连续失败后停下并把原因讲清楚，避免日志被刷屏。
-    crashLoop++
-    if (crashLoop > 6) {
-      const tail = xrayProcess.recentOutputTail(400)
-      events.error(
-        'xray.crash_loop',
-        '数据面连续 ' + crashLoop + ' 次启动失败，已停止自动拉起' + (tail ? '：' + tail : ''),
-      )
-      logger.error(
-        '数据面连续 ' + crashLoop + ' 次启动失败，已停止自动拉起。常见原因：' +
-          '① 管理端口 ' + settings.get().xray.apiAddress + ' 被上一次运行的残留进程占用；' +
-          '② xray 二进制路径不可执行（当前 ' + (resolveBin()?.path ?? settings.get().xray.binary) + '）。' +
-          '\n  → 清理残留进程后在面板「运行配置」页点「重启数据面」。',
-      )
-      return
-    }
-    const delay = Math.min(2000 * Math.pow(2, crashLoop - 1), 30_000)
-    events.warn('xray.auto_restart', '数据面进程退出，' + Math.round(delay / 1000) + ' 秒后自动拉起并重放期望状态（第 ' + crashLoop + ' 次）')
-    setTimeout(() => {
-      void restartDataplane()
-        .then((r) => {
-          if (r.ok) crashLoop = 0
-        })
-        .catch(() => undefined)
-    }, delay)
-  })
 
   let gatewayError: string | null = null
 
@@ -480,15 +630,13 @@ async function main() {
     jobs,
     auth,
     sync,
-    detector,
+    client,
+    process: mihomoProcess,
+    slots,
     publisher,
-    reconciler,
-    engine,
-    cli,
-    ports,
-    process: xrayProcess,
+    engineDir: ENGINE_DIR,
+    engineConfigPath: CONFIG_PATH,
     routing,
-    retire,
     conns,
     scheduler,
     gateway,
@@ -499,70 +647,57 @@ async function main() {
       gatewayError = msg
     },
     health,
+    canBind,
+    checkNodes,
+    sample,
+    publish,
     kick,
     restartDataplane,
   }
   const app = buildApp(ctx)
 
   // ------------------------------------------------------------------ 启动数据面
-  if (settings.get().xray.mode === 'managed') {
+  const managed = settings.get().engine.mode === 'managed'
+  if (managed) {
     try {
-      logger.info('[boot] 写入启动骨架配置')
-      xrayProcess.writeBaseConfig()
+      mkdirSync(PROVIDER_DIR, { recursive: true })
+      // ① 先渲染并落盘 config：Mihomo 只会按 -f 的文件构建 listener，缺文件时会自己造一份默认配置
+      const planned = await publisher.plan()
+      const changed = planned.configChanged
+      writeFileSync(CONFIG_PATH, planned.configText, 'utf8')
+      logger.info(
+        '[boot] 配置已就绪：' + CONFIG_PATH + '（' + planned.providers.length + ' 个 provider，' +
+          planned.slots.length + ' 个槽位' + (changed ? '，与上一份不同' : '，与上一份相同') + '）',
+      )
+      // ② 拉起进程，等 REST /version 就绪（失败时异常里带进程最后输出）
       logger.info('[boot] 拉起数据面进程')
-      await xrayProcess.start()
-      logger.info('[boot] 等待 Xray API 就绪')
-      await waitForApi(cli, 20_000)
-      const probe = await xrayProcess.probe()
-      logger.info('xray ' + (probe.version || '?') + ' 已就绪')
+      const started = await mihomoProcess.start()
+      logger.info('[boot] Mihomo ' + started.version + ' 已就绪（pid=' + String(mihomoProcess.status().pid) + '）')
+      // ③ 发布重放：结构变了才 reload；无论如何都要把每个槽位的选中项重新 PUT 回去
+      const first = await publish({ reason: 'manual' })
+      logger.info(
+        '[boot] 首次发布：ok=' + first.ok + ' 节点=' + first.assigned + ' 切换=' + countSwitched(first) +
+          (first.reloaded ? '（已 reload 结构）' : '（结构未变，未 reload）'),
+      )
+      if (!first.ok) logger.warn('[boot] 首次发布未完全成功：' + (first.error ?? '') + '（面板可继续使用，后续发布/对账会重试）')
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e)
-      events.error('xray.start_failed', '数据面启动失败：' + reason)
+      events.error('engine.start_failed', '数据面启动失败：' + reason)
       logger.error(
-        '数据面未启动（控制面继续运行）：' +
-          reason +
-          '\n  → 用 bun run build:exe 重新打包（会内嵌对应平台的 Xray）；或确认 DATA_DIR/bin 可写（内嵌二进制的解出目录）；' +
-          '也可在面板「系统设置 → xray.binary」填入外部 xray 可执行文件绝对路径后，于「运行配置」页点「重启数据面」。',
+        '数据面未启动（控制面继续运行）：' + reason +
+          '\n  → 用 bun run build:exe 重新打包（会内嵌对应平台的 Mihomo）；' +
+          '或确认 DATA_DIR/bin 可写（内嵌二进制的解出目录）；' +
+          '也可在面板「系统设置 → engine.binary」填入外部 mihomo 可执行文件绝对路径后，于「运行配置」页点「重启数据面」。' +
+          '\n  → 只是缺二进制时，执行 bun run build:exe -- --fetch-only 可以先把二进制下下来。',
       )
     }
   } else {
-    logger.info('xray.mode=external，面板不托管数据面进程')
+    logger.info('engine.mode=external，面板不托管数据面进程（需要你自己起 mihomo 并保证 REST 可达）')
   }
 
-  // 从 DB 恢复网关路由表（§9.3 控制面重启）
+  // 从 DB 恢复网关路由表（§9.3 控制面重启）：发布成功时会被覆盖成权威值
   const restored = routing.restoreFromDb()
-  rebuildRouting(settings, db, routing, false)
-  logger.info('网关路由表已从数据库恢复 ' + restored + ' 条，并与期望状态对齐')
-
-  if (settings.get().xray.replayOnStart) {
-    logger.info('[boot] 启动对账/重放')
-    try {
-      const snap = buildDesiredNodes(db, settings, ports)
-      const appliedNodes = engine.loadedApplied()
-      const res = await reconciler.reconcile(snap.desired, appliedNodes, { apply: true })
-      logger.info(
-        '启动对账完成：一致=' +
-          res.consistent +
-          '，新增=' +
-          res.plan.add.length +
-          '，移除=' +
-          res.plan.remove.length +
-          '，清理=' +
-          res.plan.cleanup.length,
-      )
-    } catch (e) {
-      logger.warn('启动对账失败: ' + (e as Error).message)
-    }
-  }
-
-  // 上次进程可能在退休队列到期前退出（retireDelayMs 默认 2 分钟）。
-  // 启动时立即补跑一次，避免「已删除节点的 outbound 永久残留 → 漂移」。
-  try {
-    const retired = await retire.processDue()
-    if (retired > 0) logger.info('[boot] 退休队列已补清理 ' + retired + ' 个 tag')
-  } catch (e) {
-    logger.warn('启动退休队列失败: ' + (e as Error).message)
-  }
+  logger.info('网关路由表已从数据库恢复 ' + restored + ' 条')
 
   logger.info('[boot] 启动网关 ' + settings.get().gateway.listen)
   try {
@@ -570,35 +705,69 @@ async function main() {
     gatewayError = null
     logger.info('[boot] 网关已监听 ' + settings.get().gateway.listen)
   } catch (e) {
-    // 网关监听失败不应拖垮控制面：PANEL.md G6/D8 要求「面板是唯一配置入口」，
-    // 用户必须先能打开面板才能改端口/解封，所以这里只告警并继续启动。
+    // 网关监听失败不应拖垮控制面：面板是唯一配置入口，用户必须先能打开面板才能改端口
     gatewayError = describeListenError(e, settings.get().gateway.listen)
     events.error('gateway.start_failed', '网关启动失败：' + gatewayError)
     logger.error('网关未启动（控制面继续运行）：' + gatewayError + '\n  → 在面板「系统设置 → gateway.listen」改端口，或释放该端口后点「保存」即可自动重建 listener。')
   }
 
   // ------------------------------------------------------------------ 调度（§13）
-  scheduler.add('retire-queue', { everySec: 30 }, async () => {
-    await retire.processDue()
-  })
   scheduler.add('conn-snapshot', { everySec: 30 }, () => conns.snapshot())
+
+  // 对账巡检：发布是幂等的（结构不变就只补槽位 PUT），所以对账=再发布一次
   scheduler.add('reconcile-patrol', { everySec: 300 }, async () => {
-    const snap = buildDesiredNodes(db, settings, ports)
-    const res = await reconciler.check(snap.desired, engine.loadedApplied(), 'reconcile')
-    if (!res.consistent) {
-      events.warn('reconcile.drift', '对账巡检发现漂移：缺少 ' + res.drift.missing.length + '，多余 ' + res.drift.extra.length, { detail: res.drift })
+    const res = await publish({ reason: 'reconcile' })
+    if (!res.ok) {
+      events.warn('reconcile.drift', '对账巡检发现并修复了漂移，但未完全成功：' + (res.error ?? ''), { detail: { revisionId: res.revisionId } })
     }
   })
+
+  // 全量（取出口 IP）节流：内存记账，进程重启后从头再来一次，对 50 条以内的小池无所谓
+  const lastFullAt = new Map<string, number>()
   scheduler.add('detect-tick', { everySec: 30 }, async () => {
-    if (!settings.get().detect.enabled) return
-    const targets = detector.dueTargets(200)
-    if (targets.length === 0) return
-    await detector.run(targets, { source: 'cron', depth: 'lite' })
-    if (settings.get().detect.fullModeEnabled) {
-      const fullTargets = targets.filter((_, i) => i % 6 === 0)
-      if (fullTargets.length) await detector.run(fullTargets, { source: 'cron', depth: 'full' })
+    const s = settings.get()
+    if (!s.detect.enabled) return
+    if (s.engine.mode === 'managed' && !mihomoProcess.isRunning()) return
+
+    // ① 被动采样：provider 健康历史 → node_status（不经过本进程，拿不到失败原因）
+    const r = await sample()
+    if (r.unavailable) {
+      // 所有 provider 都读不到 = 引擎/通道坏了：本轮不判死任何节点（整池误隔离的代价太大）
+      return
     }
+
+    // ② 按需 full：只对"活着且有槽位"的节点做出出口确认，每 tick 上限 detect.concurrency
+    const portByNode = slots.portByNode()
+    if (portByNode.size === 0) return
+    const now = Date.now()
+    const due: { nodeId: string; port: number }[] = []
+    for (const [nodeId, port] of portByNode) {
+      const last = lastFullAt.get(nodeId) ?? 0
+      if (now - last < s.detect.fullIntervalSec * 1000) continue
+      due.push({ nodeId, port })
+      if (due.length >= s.detect.concurrency) break
+    }
+    if (due.length === 0) return
+    for (const t of due) lastFullAt.set(t.nodeId, now)
+    const sem = new Semaphore(Math.max(1, s.detect.concurrency))
+    await Promise.all(
+      due.map((t) =>
+        sem.run(async () => {
+          const result = await probeViaSlot({
+            nodeId: t.nodeId,
+            port: t.port,
+            testUrl: s.detect.testUrl,
+            totalTimeoutMs: s.detect.totalTimeoutMs,
+            ipEchoUrls: s.detect.ipEchoUrls,
+            depth: 'full',
+          })
+          persistCheckResult({ db, settings, events }, result, 'cron', 'full', Date.now())
+          if (!result.ok && result.errorKind) lastFullAt.delete(t.nodeId) // 失败的下轮再试
+        }),
+      ),
+    )
   })
+
   scheduler.add('sync-tick', { everySec: 30 }, async () => {
     const subs = sync.listSubscriptions(true)
     const now = Date.now()
@@ -610,39 +779,58 @@ async function main() {
       }
     }
   })
+  // 引擎看门狗：进程意外退出后按指数退避重启并重放（否则数据面会一直躺到有人手动点重启）。
+  // 连续失败 6 次后停手并大声记一条事件：多数情况是端口被占或二进制不可执行，重试无解。
+  let engineCrashStreak = 0
+  let engineNextRetryAt = 0
+  scheduler.add('engine-watchdog', { everySec: 30 }, async () => {
+    if (settings.get().engine.mode !== 'managed') return
+    const st = mihomoProcess.status()
+    if (st.status !== 'crashed') {
+      if (st.status === 'running') engineCrashStreak = 0
+      return
+    }
+    if (Date.now() < engineNextRetryAt) return
+    engineCrashStreak++
+    if (engineCrashStreak > 6) {
+      if (engineCrashStreak === 7) {
+        events.error('engine.crash_loop', '数据面连续 7 次启动失败，已停止自动拉起；' + (mihomoProcess.tailLog(3).join(' | ') || '无输出'))
+        logger.error('数据面连续启动失败，已停止自动拉起。常见原因：REST 端口被占用 / 二进制不可执行 / config 非法。')
+      }
+      return
+    }
+    engineNextRetryAt = Date.now() + Math.min(2000 * Math.pow(2, engineCrashStreak - 1), 30_000)
+    events.warn('engine.auto_restart', '数据面进程已退出，正在自动拉起并重放槽位（第 ' + engineCrashStreak + ' 次）')
+    const r = await restartDataplane()
+    if (r.ok) engineCrashStreak = 0
+  })
+
   scheduler.add('stale-expiry', { everySec: 3600 }, () => {
     staleExpiryTask(db, settings, events)()
   })
   scheduler.add('cleanup', { cron: '15 4 * * *' }, () => {
-    detector.trimHistory()
+    const s = settings.get()
+    trimRevisions(db, s.publish.keepRevisions)
+    trimEngineOps(db)
+    trimCheckHistory(db, s.detect.historyKeep)
     conns.trimHistory(7)
-    db.delete(xrayApplyOps)
-      .where(
-        and(
-          lt(xrayApplyOps.at, Date.now() - 30 * 86400_000),
-          notInArray(
-            xrayApplyOps.id,
-            db.select({ id: xrayApplyOps.id }).from(xrayApplyOps).orderBy(desc(xrayApplyOps.id)).limit(20000)
-          )
-        )
-      )
-      .run()
-    logger.info('每日清理完成（apply ops 保留最近 30 天 / 20000 条）')
+    logger.info('每日清理完成（revision / engine_ops 最近 30 天 20000 条 / check 历史各节点最近 ' + s.detect.historyKeep + ' 条）')
   })
   scheduler.add('maintenance-window', { everySec: 60 }, async () => {
-    if (!inMaintenanceWindow(settings.get().xray.maintenanceWindow)) return
-    const threshold = settings.get().xray.hotOpsRestartThreshold
-    const hot = retire.hotOpsTotal()
-    if (threshold > 0 && hot >= threshold) {
-      events.warn('xray.maintenance_restart', '热操作累计 ' + hot + ' 次超过阈值 ' + threshold + '，在维护窗口重启数据面')
-      await jobs.enqueue(APPLY_QUEUE, 'restart', { reason: 'maintenance' }, 'system', () => restartDataplane())
+    const s = settings.get()
+    if (!inMaintenanceWindow(s.engine.maintenanceWindow)) return
+    // 维护窗口的唯一用途变成"有结构变更就发布"：Mihomo 没有热操作计数，也不该定期重启
+    const planned = await publisher.plan()
+    if (planned.configChanged) {
+      events.info('engine.maintenance_publish', '维护窗口内检测到结构变更，执行发布（会 reload，短暂断开走 provider 的连接）')
+      await jobs.enqueue(APPLY_QUEUE, 'publish', { trigger: 'maintenance' }, 'cron', async () => publish({ reason: 'cron' }))
     }
   })
 
   const panelCron = settings.get().publish.scheduleCron
   if (panelCron) {
     scheduler.add('publish-cron', { cron: panelCron }, async () => {
-      await jobs.enqueue(APPLY_QUEUE, 'publish', { trigger: 'cron' }, 'cron', async () => publisher.publish({ reason: 'cron' }))
+      await jobs.enqueue(APPLY_QUEUE, 'publish', { trigger: 'cron' }, 'cron', async () => publish({ reason: 'cron' }))
     })
   }
   scheduler.start()
@@ -650,7 +838,7 @@ async function main() {
   // ------------------------------------------------------------------ HTTP
   const server = app.listen({ port: config.panelPort, hostname: config.panelHost })
   logger.info('面板与 API 已监听 http://' + config.panelHost + ':' + config.panelPort + '（DATA_DIR=' + config.dataDir + '）')
-  events.info('panel.started', 'xc-p 控制面已启动，监听 ' + config.panelPort)
+  events.info('panel.started', 'mh-p 控制面已启动，监听 ' + config.panelPort)
 
   const shutdown = async (signal: string) => {
     logger.info('收到 ' + signal + '，正在优雅退出…')
@@ -661,8 +849,8 @@ async function main() {
       /* ignore */
     }
     conns.snapshot()
-    await cli.cleanupTemp()
-    await xrayProcess.stop()
+    // 必须停掉数据面子进程，否则容器退出后会在宿主机上留下孤儿 mihomo
+    await mihomoProcess.stop().catch(() => undefined)
     server.stop()
     db.close()
     process.exit(0)
@@ -671,48 +859,96 @@ async function main() {
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
 }
 
-/** direct 模式的账号表（附录 A） */
-function directCredentials(db: Db): { username: string; password: string }[] {
+/** 二进制探测：带路径分隔符就按文件判断，否则按 PATH 名字找 */
+function probeBinary(candidate: string, source: string): { path: string; source: string } | null {
+  const name = (candidate ?? '').trim()
+  if (!name) return null
+  const isPath = name.includes('/') || name.includes('\\')
+  if (isPath) return existsSync(name) ? { path: name, source } : null
+  const hit = Bun.which(name)
+  return hit ? { path: hit, source: source + '（PATH）' } : null
+}
+
+function mihomoNotFoundHint(configured: string): string {
+  return (
+    '找不到 Mihomo 二进制（当前配置：' + (configured || '(空)') + '）。三种修法：' +
+    '① 打包版：bun run build:exe（会内嵌对应平台的 Mihomo）；' +
+    '② 源码运行：设置 MIHOMO_BINARY 指向可执行文件，或把它放到 ./.tools/mihomo' + (process.platform === 'win32' ? '.exe' : '') + '；' +
+    '③ 只在下载：bun run build:exe -- --fetch-only 会把发行包下到 .cache/mihomo 并解出二进制。'
+  )
+}
+
+function countSwitched(o: PublishOutcome): number {
+  const hit = o.checks.find((c) => c.id === 'slotSwitch')
+  const m = hit ? /切换 (\d+) 个槽位/.exec(hit.detail) : null
+  return m ? Number(m[1]) : 0
+}
+
+/** 端口上是否有人在监听（用来区分"我们自己的槽位 listener"与"端口空闲"） */
+async function canConnect(port: number, hostname = '127.0.0.1'): Promise<boolean> {
+  try {
+    const sock = await Bun.connect({
+      hostname,
+      port,
+      socket: { data() {}, error() {}, close() {}, open() {} },
+    })
+    sock.end()
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 端口能否 bind（旧端口池的 canBind 搬过来；健康检查与设置页自检共用） */
+async function canBindPort(port: number, hostname = '127.0.0.1'): Promise<boolean> {
+  try {
+    const server = Bun.serve({ hostname, port, fetch: () => new Response('ok') })
+    server.stop(true)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** runtime_revisions 裁剪：只裁非 active，active 永远保留（面板要能显示"当前生效"） */
+function trimRevisions(db: Db, keep: number): void {
+  const n = Math.max(1, Math.trunc(keep))
   const rows = db
-    .select({ username: nodeCredentials.username, password_enc: nodeCredentials.password_enc })
-    .from(nodeCredentials)
+    .select({ id: runtimeRevisions.id, status: runtimeRevisions.status })
+    .from(runtimeRevisions)
+    .orderBy(desc(runtimeRevisions.created_at))
     .all()
-  const out: { username: string; password: string }[] = []
-  for (const r of rows) {
-    try {
-      out.push({ username: r.username, password: decryptSecret(r.password_enc) })
-    } catch {
-      /* 解密失败跳过 */
-    }
+  const inactive = rows.filter((r) => r.status !== 'active')
+  for (const r of inactive.slice(n)) {
+    db.delete(revisionNodes).where(eq(revisionNodes.revision_id, r.id)).run()
+    db.delete(runtimeRevisions).where(eq(runtimeRevisions.id, r.id)).run()
   }
-  return out
 }
 
-/** 用期望状态重建网关路由表（含 rename 别名） */
-function rebuildRouting(settings: SettingsStore, db: Db, routing: RoutingTable, persist = true): void {
-  const desired = buildDesiredNodes(db, settings, new PortPool(db, settings))
-  const entries = desired.desired.map((d) => ({ nodeId: d.nodeId, username: d.username, port: d.inboundPort, tag: d.outboundTag }))
-  const aliases = db
-    .select({ alias: nodeAliases.alias, node_id: nodeAliases.node_id })
-    .from(nodeAliases)
-    .where(eq(nodeAliases.active, 1))
-    .all()
-  for (const a of aliases) {
-    const base = entries.find((e) => e.nodeId === a.node_id)
-    if (base) entries.push({ ...base, username: a.alias })
-  }
-  routing.replace(entries)
-  if (persist) routing.persist()
+/** engine_ops 裁剪：保留最近 30 天且最多 20000 条（沿用旧 xray_apply_ops 的口径） */
+function trimEngineOps(db: Db): void {
+  db.delete(engineOps)
+    .where(
+      and(
+        lt(engineOps.at, Date.now() - 30 * 86400_000),
+        notInArray(
+          engineOps.id,
+          db.select({ id: engineOps.id }).from(engineOps).orderBy(desc(engineOps.id)).limit(20000),
+        ),
+      ),
+    )
+    .run()
 }
 
-async function waitForApi(cli: XrayCli, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    const r = await cli.lso()
-    if (r.result.ok) return
-    await new Promise((res) => setTimeout(res, 300))
-  }
-  throw new Error('Xray API 在 ' + timeoutMs + 'ms 内不可达')
+/** 每个节点只留最近 keep 条检测历史（node_check_runs 是"最近 N 次"语义，不是全量审计） */
+function trimCheckHistory(db: Db, keep: number): void {
+  const k = Math.max(5, Math.trunc(keep))
+  db.exec(
+    'DELETE FROM node_check_runs WHERE id NOT IN (' +
+      'SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY node_id ORDER BY at DESC) AS rn FROM node_check_runs) WHERE rn <= ' +
+      k +
+      ')',
+  )
 }
 
 /** 把 listener 报错翻译成可执行的提示（最常见的是端口被占用） */
@@ -733,16 +969,11 @@ function parseListen(listen: string): { host: string; port: number } {
 }
 
 /**
- * `xc-p healthcheck`：探测控制面自身存活，退出码 0 = 健康。
+ * `mh-p healthcheck`：探测控制面自身存活，退出码 0 = 健康。
  *
- * 容器 HEALTHCHECK 依赖这个子命令：distroless 基础镜像没有 curl/wget/shell 可用，
- * 探针必须随二进制一起走（与 Dockerfile 的 HEALTHCHECK 配对）。
- *
- * 判定只取「面板能应答 + SQLite 可读」。/api/health 的 overall 描述的是**数据面**状态
- * （端口池耗尽、网关停用都会变成 degraded），拿它当容器存活条件会让正常运行的面板被反复重启。
- *
- * 必须依次试多个回环写法：面板默认绑 PANEL_HOST=localhost，而 localhost 解析到
- * 127.0.0.1 还是 ::1 因系统而异（实测本机只绑 ::1），写死一个会把健康的面板误判为不健康。
+ * 容器 HEALTHCHECK 依赖这个子命令：distroless 基础镜像没有 curl/wget/shell 可用。
+ * 判定只取「面板能应答 + SQLite 可读」：/api/health 的 overall 描述的是数据面状态，
+ * 拿它当容器存活条件会让正常运行的面板被反复重启。
  */
 async function runHealthcheck(): Promise<number> {
   let lastErr = ''

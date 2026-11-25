@@ -1,5 +1,5 @@
 /**
- * @xc-p/api-client —— 前后端共享的 Eden Treaty 客户端。
+ * @mh-p/api-client —— 前后端共享的 Eden Treaty 客户端。
  *
  * monorepo 中前端（web/）通过本包复用后端（apps/server/src/app.ts）的 Elysia 路由类型：
  * - `App` 是后端 Elysia 实例的类型（只做类型导入，构建时被擦除）；

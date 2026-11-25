@@ -3,8 +3,11 @@ import { logger } from '../core/log'
 export type ErrorKind =
   | 'tcp_timeout' | 'tcp_refused' | 'tcp_unreachable' | 'dns_failed' | 'tls_error' | 'total_timeout'
   | 'gateway_unreachable' | 'proxy_auth' | 'proxy_handshake' | 'http_status' | 'empty_reply' | 'no_proxy_effect'
-  | 'xray_api_unreachable' | 'xray_tag_conflict' | 'xray_build_failed' | 'xray_port_conflict' | 'xray_down'
+  | 'engine_unreachable' | 'engine_build_failed' | 'engine_port_conflict' | 'engine_down' | 'engine_unavailable'
   | 'ip_echo_failed' | 'unsupported_protocol' | 'internal'
+  // Mihomo 链路新增：'mihomo_down' = 槽位 listener 不可达（旧 gateway_unreachable 的历史命名在 Mihomo 里没有意义）；
+  // 'mihomo_unhealthy' = 被动观测（provider health-check）判定失败，但 API 不提供失败原因。
+  | 'mihomo_down' | 'mihomo_unhealthy'
 
 export interface TcpResult { ok: boolean; ms: number; errorKind?: ErrorKind; errorMsg?: string }
 export interface HttpResult { ok: boolean; ms: number; status?: number; body?: string; errorKind?: ErrorKind; errorMsg?: string }

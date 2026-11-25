@@ -1,14 +1,14 @@
 /**
  * /api/* 客户端（PANEL.md §11.1）——基于 Elysia Eden Treaty 的端到端类型安全调用。
  *
- * 后端 Elysia 路由类型经 @xc-p/api-client 共享：
+ * 后端 Elysia 路由类型经 @mh-p/api-client 共享：
  *   const data = await unwrap(eden.api.nodes.get({ query: { limit: 50 } }))
  *
  * 面板内部统一用 `unwrap(...)` 把 Eden 结果转成「成功返回 data / 失败抛 ApiError」，
  * 这样 useResource / useAction / useConfirm 的既有错误处理保持不变。
  * 401 由 Eden 的 onResponse 统一触发登出（见 setUnauthorizedHandler）。
  */
-import { ApiError, createEdenClient, unwrap, type EdenResult } from "@xc-p/api-client"
+import { ApiError, createEdenClient, unwrap, type EdenResult } from "@mh-p/api-client"
 
 export { ApiError, unwrap }
 
@@ -20,7 +20,7 @@ export function setUnauthorizedHandler(fn: ((error: ApiError) => void) | null) {
 
 /** 同源部署：keepDomain + 空 baseUrl → 浏览器请求 /api/... 相对路径。 */
 export const eden = createEdenClient({
-  headers: { "x-requested-with": "xc-p-panel" },
+  headers: { "x-requested-with": "mh-p-panel" },
   onUnauthorized: () => onUnauthorized?.(new ApiError(401, "unauthorized", "未登录或会话已过期")),
 })
 

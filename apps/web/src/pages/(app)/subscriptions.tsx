@@ -45,7 +45,7 @@ import { route as appRoute } from "./_route"
 
 export const route = defineRoute()
   .config({ layout: appRoute, mode: "ssg" })
-  .head(() => ({ meta: [{ title: "订阅 · xc-p" }] }))
+  .head(() => ({ meta: [{ title: "订阅 · mh-p" }] }))
   .page(() => <SubscriptionsPage />)
 
 const SORT_OPTIONS = [
